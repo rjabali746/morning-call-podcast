@@ -1,37 +1,30 @@
-<?xml version="1.0" ?>
-<rss xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" version="2.0">
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
     <title>Morning Call Jabali</title>
-    <link>http://localhost:8000</link>
-    <description>Notícias diárias sobre crédito, pagamentos e finanças</description>
+    <link>https://rjabali746.github.io/morning-call-podcast</link>
+    <description>Resumo diário das principais notícias de crédito, pagamentos e finanças do Valor Econômico.</description>
     <language>pt-br</language>
-    <author>Roberto Jabali</author>
     <itunes:author>Roberto Jabali</itunes:author>
     <itunes:explicit>false</itunes:explicit>
-    <image>
-      <url>https://via.placeholder.com/1400x1400?text=Morning+Call+Jabali</url>
-      <title>Morning Call Jabali</title>
-      <link>http://localhost:8000</link>
-    </image>
-    <itunes:image href="https://via.placeholder.com/1400x1400?text=Morning+Call+Jabali"/>
     <itunes:category text="Business"/>
+    <itunes:image href="https://rjabali746.github.io/morning-call-podcast/cover.jpg"/>
+    <image>
+      <url>https://rjabali746.github.io/morning-call-podcast/cover.jpg</url>
+      <title>Morning Call Jabali</title>
+      <link>https://rjabali746.github.io/morning-call-podcast</link>
+    </image>
     <item>
-      <title>Morning Call - 2026-05-31</title>
-      <description>Notícias de crédito e pagamentos - 2026-05-31</description>
-      <pubDate>Sun, 31 May 2026 11:24:31 +0000</pubDate>
-      <guid>http://localhost:8000/episode/1</guid>
-      <enclosure url="http://localhost:8000/audio/teste_audio.mp3" length="103" type="audio/mpeg"/>
-      <itunes:duration>1:00:00</itunes:duration>
-      <itunes:explicit>false</itunes:explicit>
-      <itunes:author>Roberto Jabali</itunes:author>
-    </item>
-    <item>
-      <title>Morning Call - 2026-05-31</title>
-      <description>Notícias de crédito e pagamentos - 2026-05-31</description>
-      <pubDate>Sun, 31 May 2026 13:14:34 +0000</pubDate>
-      <guid>http://localhost:8000/episode/2</guid>
-      <enclosure url="http://localhost:8000/audio/Morning Call Jabali. Notícias de crédito e pagamen.mp3" length="580122" type="audio/mpeg"/>
-      <itunes:duration>1:00:00</itunes:duration>
+      <title>Morning Call - 05/06/2026</title>
+      <description>Principais notícias de crédito e finanças - Morning Call - 05/06/2026</description>
+      <pubDate>Fri, 05 Jun 2026 21:30:56 +0000</pubDate>
+      <guid isPermaLink="false">https://rjabali746.github.io/morning-call-podcast/audio/podcast_20260605_213056.mp3</guid>
+      <enclosure url="https://rjabali746.github.io/morning-call-podcast/audio/podcast_20260605_213056.mp3"
+                 length="3246751"
+                 type="audio/mpeg"/>
+      <itunes:duration>3:22</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
       <itunes:author>Roberto Jabali</itunes:author>
     </item>
