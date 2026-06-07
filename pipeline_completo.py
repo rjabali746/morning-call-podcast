@@ -227,13 +227,18 @@ def etapa_scraping() -> str:
     if not noticias_novas:
         log.warning("  ⚠️  Todos os artigos já foram usados — incluindo os mais recentes mesmo assim")
         noticias_novas = noticias[:5]
+
+    # Salvar TODOS os artigos encontrados neste scrape (não só os top 5).
+    # Isso garante que artigos rankeados abaixo de top-5 também sejam marcados
+    # como "usados" e não apareçam em episódios futuros — conteúdo sempre novo.
+    todas_used = list(used_urls | {n["link"] for n in noticias if n.get("link")})
+    todas_used = todas_used[-200:]  # histórico de ~40 dias
+    with open(used_file, "w", encoding="utf-8") as f:
+        json.dump(todas_used, f, ensure_ascii=False, indent=2)
+    log.info(f"  💾 Histórico atualizado: {len(todas_used)} artigos no total")
+
     noticias = noticias_novas
-
     noticias  = enriquecer_artigos(session, noticias, top=5, cookies_list=cookies_list)
-
-    # ── Salvar URLs usadas neste episódio ─────────────────────────────────────
-    todas_used = list(used_urls | {n["link"] for n in noticias[:5] if n.get("link")})
-    todas_used = todas_used[-150:]  # limitar histórico a 150 artigos (~30 dias)
     with open(used_file, "w", encoding="utf-8") as f:
         json.dump(todas_used, f, ensure_ascii=False, indent=2)
 
