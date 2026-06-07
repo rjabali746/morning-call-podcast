@@ -33,8 +33,16 @@ except ImportError:
 # CONFIGURAÇÃO
 # ============================================================================
 
-CONFIG_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-COOKIE_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "valor_cookies.json")
+CONFIG_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+COOKIE_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "valor_cookies.json")
+PERFIL_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perfil_interesses.json")
+
+# ── Parâmetros de tempo do podcast ────────────────────────────────────────────
+WPM_PODCAST      = 140   # palavras por minuto narradas em português (ElevenLabs)
+MAX_MIN_PODCAST  = 20    # duração máxima do episódio em minutos
+MAX_CHARS_RESUMO = 1500  # caracteres máx por resumo de notícia (~250 palavras)
+# Palavras fixas de intro + outro (estimativa)
+_PALAVRAS_INTRO_OUTRO = 70
 
 # Páginas de seção do Valor (scraping direto, sem RSS)
 VALOR_SECOES = [
@@ -52,18 +60,138 @@ VALOR_SECOES_FALLBACK = [
     ("Mercados",   "https://www.valor.com.br/mercados"),
 ]
 
-# Palavras-chave de interesse
+# Palavras-chave base — usadas como filtro mínimo de relevância (fallback sem perfil)
+# Inclui os termos core do negócio do Roberto: crédito PF + adquirência + PME
 PALAVRAS_CHAVE = [
+    # Crédito PF (core)
+    "cartão de crédito", "crédito rotativo", "parcelamento",
+    "financiamento de veículo", "financiamento de moto",
+    "crédito consignado", "consignado", "crédito pessoal",
+    "empréstimo pessoal", "bnpl", "inadimplência",
+    "inadimplencia", "score de crédito", "serasa",
+    # Adquirência (core)
+    "adquirente", "adquirência", "maquininha", "cielo", "rede",
+    "mdr", "taxa de desconto", "credenciamento", "split de pagamento",
+    "tap to pay", "infinitepay",
+    # Crédito PME (core)
+    "capital de giro", "antecipação de recebíveis", "recebíveis",
+    "microcrédito", "crédito para mei", "pronampe", "factoring",
+    # Mercado financeiro geral
     "crédito", "credito", "financiamento", "empréstimo", "emprestimo",
     "juros", "selic", "banco", "pagamento", "pix", "fintech",
-    "inadimplência", "inadimplencia", "cartão", "cartao",
     "open finance", "open banking", "banco central", "bcb",
-    "bndes", "caixa econômica", "caixa economica",
-    "spread", "fgc", "securitização", "securitizacao",
-    "debenture", "debênture", "cri", "cra",
-    "bradesco", "itaú", "itau", "santander", "btg",
-    "consórcio", "consorcio", "leasing", "capital de giro",
+    "spread", "bradesco", "itaú", "itau", "santander", "btg",
 ]
+
+# ============================================================================
+# PERFIL DE INTERESSES (carregado de perfil_interesses.json)
+# ============================================================================
+
+_perfil_cache = None
+
+def carregar_perfil():
+    """Carrega o perfil de interesses personalizado do Roberto."""
+    global _perfil_cache
+    if _perfil_cache is not None:
+        return _perfil_cache
+    if os.path.exists(PERFIL_FILE):
+        try:
+            with open(PERFIL_FILE, "r", encoding="utf-8") as f:
+                _perfil_cache = json.load(f)
+            print(f"  ✅ Perfil de interesses carregado ({len(_perfil_cache.get('temas', []))} temas, "
+                  f"{len(_perfil_cache.get('entidades_prioritarias', {}).get('lista', []))} entidades prioritárias)")
+            return _perfil_cache
+        except Exception as e:
+            print(f"  ⚠️  Erro ao carregar perfil_interesses.json: {e}")
+    return None
+
+
+def _todas_palavras_perfil(perfil):
+    """Retorna set com todas as palavras do perfil (para filtro de relevância)."""
+    palavras = set()
+    if not perfil:
+        return palavras
+    # Palavras dos temas
+    for tema in perfil.get("temas", []):
+        for p in tema.get("palavras", []):
+            palavras.add(p.lower())
+    # Entidades dos 3 tiers
+    entidades_cfg = perfil.get("entidades_prioritarias", {})
+    for tier_key in ("tier1_empresa", "tier2_concorrentes_diretos", "tier3_relevantes"):
+        for entidade in entidades_cfg.get(tier_key, {}).get("lista", []):
+            palavras.add(entidade.lower())
+    return palavras
+
+
+def calcular_score_perfil(noticia, perfil):
+    """
+    Calcula score de relevância baseado no perfil de interesses.
+    Retorna (score_total, detalhes) — score mais alto = mais relevante.
+
+    Lógica de pontuação:
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  Temas (peso × min(hits, 2)):                                    │
+    │    Peso 7 → até +14  (crédito PF, adquirência, PME)             │
+    │    Peso 5 → até +10  (fintechs, política monetária)             │
+    │    Peso 4 → até  +8  (executivos, ratings, IA, regulação)       │
+    │    Peso 2-3 → até +6  (macro, ESG, internacional)               │
+    │                                                                  │
+    │  Entidades (sistema de 3 tiers):                                 │
+    │    Tier 1 — Mercado Pago / Mercado Livre: +6 por ocorrência     │
+    │    Tier 2 — Concorrentes diretos:          +4 por ocorrência     │
+    │    Tier 3 — Incumbentes / reguladores:     +3 por ocorrência     │
+    │                                                                  │
+    │  Penalizações: subtraem conforme peso configurado                │
+    │                                                                  │
+    │  Score esperado:                                                 │
+    │    Artigo CORE (MP + crédito PF + adquirência) → 25–40 pts      │
+    │    Artigo estratégico (fintech + Selic) → 15–25 pts             │
+    │    Artigo secundário (macro, ESG) → 2–8 pts                     │
+    └──────────────────────────────────────────────────────────────────┘
+    """
+    texto = (noticia.get("titulo", "") + " " + noticia.get("resumo", "")).lower()
+    score = 0
+    detalhes = []
+
+    if not perfil:
+        return sum(1 for p in PALAVRAS_CHAVE if p in texto), []
+
+    # ── Pontuação por tema ────────────────────────────────────────────────────
+    for tema in perfil.get("temas", []):
+        nome     = tema.get("nome", "?")
+        peso     = tema.get("peso", 1)
+        palavras = tema.get("palavras", [])
+        matches  = [p for p in palavras if p.lower() in texto]
+        if matches:
+            contribuicao = peso * min(len(matches), 2)  # cap: 2 hits por tema
+            score += contribuicao
+            detalhes.append(f"{nome}(+{contribuicao}:{','.join(matches[:2])})")
+
+    # ── Bônus por entidade — sistema de 3 tiers ──────────────────────────────
+    entidades_cfg = perfil.get("entidades_prioritarias", {})
+
+    for tier_key, tier_bonus in [
+        ("tier1_empresa",            6),
+        ("tier2_concorrentes_diretos", 4),
+        ("tier3_relevantes",         3),
+    ]:
+        tier = entidades_cfg.get(tier_key, {})
+        bonus_cfg = tier.get("bonus", tier_bonus)
+        for entidade in tier.get("lista", []):
+            if entidade.lower() in texto:
+                score += bonus_cfg
+                detalhes.append(f"{tier_key}(+{bonus_cfg}:{entidade.strip()})")
+
+    # ── Penalizações ─────────────────────────────────────────────────────────
+    for pen in perfil.get("penalizacoes", []):
+        peso_pen = pen.get("peso", -2)
+        for palavra in pen.get("palavras", []):
+            if palavra.lower() in texto:
+                score += peso_pen
+                detalhes.append(f"penalidade({peso_pen}:{palavra})")
+                break
+
+    return score, detalhes
 
 HEADERS = {
     "User-Agent": (
@@ -93,8 +221,21 @@ def load_config():
         sys.exit(1)
 
 def eh_relevante(texto):
+    """
+    Verifica se o artigo é relevante para o Morning Call.
+    Usa palavras-chave base + todas as palavras do perfil personalizado.
+    """
     t = texto.lower()
-    return any(p in t for p in PALAVRAS_CHAVE)
+    # 1. Palavras-chave base
+    if any(p in t for p in PALAVRAS_CHAVE):
+        return True
+    # 2. Palavras do perfil personalizado (se disponível)
+    perfil = carregar_perfil()
+    if perfil:
+        for palavra in _todas_palavras_perfil(perfil):
+            if palavra in t:
+                return True
+    return False
 
 def limpar_texto(texto):
     if not texto:
@@ -325,14 +466,97 @@ def buscar_noticias(session):
             vistos.add(chave)
             unicas.append(n)
 
-    # Ordenar por relevância (score de palavras-chave)
-    def score(n):
-        t = (n["titulo"] + " " + n["resumo"]).lower()
-        return sum(1 for p in PALAVRAS_CHAVE if p in t)
+    # ── Scoring com perfil personalizado ─────────────────────────────────────
+    perfil = carregar_perfil()
 
-    unicas.sort(key=score, reverse=True)
+    def score_com_perfil(n):
+        s, _ = calcular_score_perfil(n, perfil)
+        return s
+
+    unicas.sort(key=score_com_perfil, reverse=True)
+
+    # Armazenar score em cada artigo (usado depois na seleção por tempo)
+    for n in unicas:
+        s, det = calcular_score_perfil(n, perfil)
+        n["score_relevancia"] = s
+        n["score_detalhes"]   = det
+
+    # Log dos scores para transparência (top 8)
+    # Score de referência com perfil v2:
+    #   Artigo core (crédito PF / adquirência / PME) → 14–30 pts
+    #   Artigo estratégico (fintech / Selic) → 10–20 pts
+    #   Artigo secundário (macro, ESG) → 2–8 pts
     print(f"\n  📊 Total: {len(unicas)} notícias únicas e relevantes")
+    print(f"  🎯 Ranking por perfil de interesses (top {min(8, len(unicas))}):")
+    for i, n in enumerate(unicas[:8], 1):
+        s, detalhes = calcular_score_perfil(n, perfil)
+        # Ícone de prioridade baseado no score
+        if s >= 14:
+            icone = "🔴"   # core do negócio
+        elif s >= 8:
+            icone = "🟡"   # estratégico
+        else:
+            icone = "⚪"   # contexto
+        detalhe_str = " | ".join(detalhes[:3]) if detalhes else "base"
+        print(f"     {i}. {icone} [{s:>3}pts] {n['titulo'][:60]}")
+        if detalhes:
+            print(f"           ↳ {detalhe_str}")
+
     return unicas
+
+
+# ============================================================================
+# SELEÇÃO POR TEMPO
+# ============================================================================
+
+def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST):
+    """
+    Seleciona notícias em ordem de score de relevância até o limite de tempo.
+
+    Algoritmo:
+    1. Parte das notícias JÁ ordenadas por score (maior → menor).
+    2. Estima as palavras que cada notícia vai gerar no script (título + resumo).
+    3. Adiciona notícias greedy até que a próxima ultrapassaria max_min.
+    4. Loga quantas foram incluídas e o tempo estimado.
+
+    Referência de calibração:
+      • Intro + outro:  ~70 palavras fixas
+      • Por notícia:    título (~10 pal) + overhead (~5 pal) + resumo (~250 pal) ≈ 265 pal
+      • 10 notícias:    70 + 10×265 = 2720 pal ≈ 19.4 min  ← perto do teto de 20 min
+      •  5 notícias:    70 +  5×265 = 1395 pal ≈ 10.0 min  ← atual baseline
+    """
+    max_palavras = max_min * wpm
+    palavras_usadas = _PALAVRAS_INTRO_OUTRO
+    selecionadas = []
+
+    for n in noticias:
+        conteudo = n.get("conteudo_completo") or n.get("resumo") or ""
+        resumo   = resumir_noticia(conteudo, max_chars=MAX_CHARS_RESUMO)
+        titulo   = n.get("titulo", "")
+
+        # Estimar palavras: título + "Notícia N. " (overhead) + resumo narrado
+        palavras_noticia = len(titulo.split()) + 5 + len(resumo.split())
+
+        if palavras_usadas + palavras_noticia > max_palavras:
+            break  # esta notícia ultrapassaria o limite — para aqui
+
+        palavras_usadas  += palavras_noticia
+        selecionadas.append(n)
+
+    tempo_min  = palavras_usadas / wpm
+    tempo_seg  = int((tempo_min % 1) * 60)
+    tempo_str  = f"{int(tempo_min)}min{tempo_seg:02d}s"
+
+    print(f"\n  ⏱️  Seleção por tempo: {len(selecionadas)} notícias selecionadas")
+    print(f"       Duração estimada: ~{tempo_str}  "
+          f"({palavras_usadas} palavras @ {wpm} wpm | limite: {max_min} min)")
+    for i, n in enumerate(selecionadas, 1):
+        score = n.get("score_relevancia", "?")
+        icone = "🔴" if isinstance(score, int) and score >= 14 else (
+                "🟡" if isinstance(score, int) and score >= 8  else "⚪")
+        print(f"       {i}. {icone} [{score:>3}pts] {n['titulo'][:65]}")
+
+    return selecionadas
 
 
 # ============================================================================
@@ -581,10 +805,15 @@ def resumir_noticia(conteudo, max_chars=500):
     return resumo.strip()
 
 
-def formatar_para_podcast(noticias, max_noticias=5):
+def formatar_para_podcast(noticias):
     """
-    Gera um roteiro de podcast conciso e profissional.
-    Alvo: 2.500-3.500 chars (~5-7 minutos de áudio, ~$0.04/episódio no ElevenLabs Creator).
+    Gera o roteiro narrado do episódio.
+
+    Recebe a lista de notícias JÁ selecionadas por selecionar_por_tempo()
+    — sem cap fixo de quantidade, o limitador é o tempo.
+
+    Resumo por notícia: até MAX_CHARS_RESUMO chars (~250 palavras),
+    suficiente para episódios de 15-20 minutos com 8-10 notícias.
     """
     meses = ["janeiro","fevereiro","março","abril","maio","junho",
              "julho","agosto","setembro","outubro","novembro","dezembro"]
@@ -601,11 +830,10 @@ def formatar_para_podcast(noticias, max_noticias=5):
         "",
     ]
 
-    for i, n in enumerate(noticias[:max_noticias], 1):
-        titulo  = n["titulo"]
-        secao   = n.get("secao", "Valor Econômico")
+    for i, n in enumerate(noticias, 1):
+        titulo   = n["titulo"]
         conteudo = n.get("conteudo_completo") or n.get("resumo") or ""
-        resumo  = resumir_noticia(conteudo, max_chars=450)
+        resumo   = resumir_noticia(conteudo, max_chars=MAX_CHARS_RESUMO)
 
         linhas.append(f"Notícia {i}. {titulo}.")
         linhas.append("")
@@ -614,17 +842,20 @@ def formatar_para_podcast(noticias, max_noticias=5):
         linhas.append("")
 
     linhas += [
-        "Essas foram as principais notícias de hoje do Valor Econômico.",
+        f"Essas foram as {len(noticias)} principais notícias de hoje do Valor Econômico.",
         "Tenha um excelente dia de negócios. Até amanhã!",
     ]
 
-    roteiro = "\n".join(linhas)
+    roteiro  = "\n".join(linhas)
+    n_chars  = len(roteiro)
+    n_words  = len(roteiro.split())
+    duracao_min = n_words / WPM_PODCAST
+    dur_str  = f"{int(duracao_min)}min{int((duracao_min % 1)*60):02d}s"
+    custo    = (n_chars / 1000) * 0.015   # $0.015/1k chars (ElevenLabs pay-as-you-go)
 
-    # Log do tamanho para monitorar custo ElevenLabs
-    n_chars = len(roteiro)
-    custo_estimado = (n_chars / 1000) * 0.015  # $0.015 por 1k chars (Creator plan)
-    print(f"\n  📝 Roteiro: {n_chars} chars | ~{n_chars//150} min de áudio | "
-          f"custo estimado: ${custo_estimado:.3f}")
+    print(f"\n  📝 Roteiro final: {len(noticias)} notícias | "
+          f"{n_words} palavras | ~{dur_str} | "
+          f"{n_chars} chars | custo est. ${custo:.3f}")
 
     return roteiro
 

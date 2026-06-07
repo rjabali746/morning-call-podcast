@@ -1,0 +1,329 @@
+{
+  "_meta": {
+    "versao": 2,
+    "ultima_atualizacao": "2026-06-07",
+    "total_exemplos_analisados": 15,
+    "contexto_profissional": "Empresa com forte atuação em crédito pessoa física e adquirência",
+    "descricao": "Perfil de interesses do Roberto Jabali. Temas de peso 7 = core do negócio (crédito PF, adquirência, PME). Peso 5 = alto interesse pessoal/estratégico. Peso 4 = relevante mas secundário. Pesos menores = contexto de mercado.",
+    "escala_de_pesos": {
+      "7": "Core do negócio — sempre quer saber",
+      "5": "Alto interesse estratégico",
+      "4": "Relevante e acompanha de perto",
+      "3": "Contexto importante",
+      "2": "Bom saber quando aparecer",
+      "-3": "Penalização — fora do escopo"
+    }
+  },
+
+  "temas": [
+
+    {
+      "nome": "credito_pessoa_fisica",
+      "descricao": "Crédito PF em todas as modalidades: cartão, consignado, veículos, pessoal, BNPL",
+      "peso": 7,
+      "palavras": [
+        "cartão de crédito", "cartao de credito",
+        "crédito rotativo", "credito rotativo",
+        "parcelamento", "parcelado", "crédito parcelado",
+        "limite de crédito", "limite do cartão",
+        "financiamento de veículo", "financiamento de veiculo",
+        "financiamento de automóvel", "financiamento de automovel",
+        "financiamento de moto", "crédito para moto",
+        "crédito consignado", "consignado privado", "consignado público",
+        "consignado inss", "empréstimo consignado",
+        "crédito pessoal", "empréstimo pessoal",
+        "bnpl", "buy now pay later", "compre agora pague depois",
+        "inadimplência pessoa física", "inadimplência do consumidor",
+        "inadimplência de cartão", "calote",
+        "score de crédito", "bureau de crédito", "serasa", "boa vista",
+        "superendividamento", "portabilidade de crédito",
+        "crédito imobiliário", "financiamento imobiliário",
+        "fgts", "saque-aniversário"
+      ]
+    },
+
+    {
+      "nome": "adquirencia_meios_pagamento",
+      "descricao": "Maquininhas, adquirentes, MDR, credenciamento, regulação de pagamentos",
+      "peso": 7,
+      "palavras": [
+        "adquirente", "adquirência", "adquirencia",
+        "maquininha", "maquininhas", "pos", "tef",
+        "taxa de desconto", "mdr", "interchange",
+        "credenciamento", "credenciamento de lojistas",
+        "split de pagamento", "split payment",
+        "tap to pay", "tap to phone", "nfc",
+        "cielo", "rede", "getnet", "infinitepay",
+        "stone", "pagseguro", "pagbank",
+        "mercado pago", "mercadopago",
+        "subadquirente", "facilitador de pagamento",
+        "isv", "iso", "agente de pagamento",
+        "meios de pagamento", "meio de pagamento",
+        "bandeira", "visa", "mastercard", "elo", "hipercard",
+        "débito", "débito automático", "boleto",
+        "pix parcelado", "pix crédito",
+        "regulação de pagamentos", "ecossistema de pagamentos",
+        "arranjo de pagamento", "câmara de compensação",
+        "chargeback", "contestação de transação"
+      ]
+    },
+
+    {
+      "nome": "credito_pme",
+      "descricao": "Crédito para MPEs, MEIs, antecipação de recebíveis, capital de giro",
+      "peso": 7,
+      "palavras": [
+        "capital de giro", "antecipação de recebíveis",
+        "antecipação de recebimento", "desconto de recebíveis",
+        "crédito para pme", "crédito para mpe",
+        "crédito para pequena empresa", "crédito para micro empresa",
+        "crédito para mei", "microcrédito",
+        "garantia de crédito", "fundo garantidor",
+        "pronampe", "programa nacional",
+        "factoring", "fidc", "cessão de crédito",
+        "recebíveis de cartão", "agenda de recebíveis",
+        "trava bancária", "conta garantida",
+        "empréstimo para empresa", "financiamento empresarial",
+        "crédito produtivo", "crédito para empreendedor"
+      ]
+    },
+
+    {
+      "nome": "inadimplencia_perspectivas",
+      "descricao": "Projeções, tendências e pesquisas forward-looking sobre inadimplência e endividamento do consumidor brasileiro",
+      "peso": 6,
+      "palavras": [
+        "inadimplência", "inadimplencia",
+        "perspectiva de inadimplência", "perspectiva de inadimplencia",
+        "outlook de inadimplência", "outlook de crédito",
+        "projeção de inadimplência", "projecao de inadimplencia",
+        "tendência de inadimplência", "tendencia de inadimplencia",
+        "calote", "taxa de calote",
+        "npl", "non-performing", "non performing",
+        "default rate", "taxa de default",
+        "endividamento das famílias", "endividamento das familias",
+        "endividamento do consumidor", "endividamento familiar",
+        "comprometimento de renda", "comprometimento da renda",
+        "superendividamento", "super endividamento",
+        "peic", "pesquisa de endividamento",
+        "condições de crédito", "condicoes de credito",
+        "qualidade da carteira", "deterioração da carteira",
+        "risco de crédito do consumidor",
+        "índice de inadimplência", "indice de inadimplencia",
+        "atraso de pagamento", "atrasos no pagamento",
+        "intenção de compra a prazo", "intencao de compra",
+        "confiança do consumidor", "confianca do consumidor",
+        "perspectivas de crédito", "perspectivas de credito"
+      ]
+    },
+
+    {
+      "nome": "fintechs_bancos_digitais",
+      "descricao": "Fintechs e bancos digitais — movimentos estratégicos, expansão, resultados",
+      "peso": 5,
+      "palavras": [
+        "nubank", "banco inter", "inter&co", "c6 bank", "c6bank", "neon",
+        "picpay", "pagbank", "stone", "getnet", "pagseguro", "mercadopago",
+        "mercado pago", "realize", "trigg", "superdigital", "will bank",
+        "banco original", "sofisa", "next", "iti", "modalmais",
+        "banco digital", "fintech", "insurtech", "fintechs",
+        "creditas", "geru", "rebel", "jeitto", "noverde",
+        "open co", "a55", "trace finance"
+      ]
+    },
+
+    {
+      "nome": "politica_monetaria_juros",
+      "descricao": "Selic, Copom, juros futuros, Fed, payroll — custo do dinheiro",
+      "peso": 5,
+      "palavras": [
+        "selic", "copom", "juros futuros", "curva de juros", "curva futura",
+        "payroll", "federal reserve", "fed", "fomc",
+        "galípolo", "galipolo", "campos neto", "banco central",
+        "tesouro nacional", "intervenção do tesouro",
+        "taxa básica", "juros americanos", "treasury",
+        "política monetária", "ciclo de juros",
+        "alta de juros", "corte de juros", "manutenção da selic"
+      ]
+    },
+
+    {
+      "nome": "regulacao_bancaria_credito",
+      "descricao": "Regulação do Banco Central voltada a crédito, pagamentos e fintechs",
+      "peso": 4,
+      "palavras": [
+        "resolução bcb", "circular bcb", "instrução normativa",
+        "open finance", "open banking",
+        "drex", "real digital",
+        "pix", "sistema de pagamentos instantâneos",
+        "regulação de crédito", "teto de juros",
+        "portabilidade", "cadastro positivo",
+        "sistema financeiro nacional", "sfn",
+        "sandbox regulatório", "fintechs reguladas",
+        "ip", "instituição de pagamento",
+        "scr", "sistema de informações de crédito"
+      ]
+    },
+
+    {
+      "nome": "movimentos_executivos_bancos",
+      "descricao": "Troca de CFO, CEO, diretores em bancos e fintechs",
+      "peso": 4,
+      "palavras": [
+        "cfo", "ceo", "diretor-presidente", "novo diretor", "nova diretora",
+        "troca de", "saída do", "assume cargo", "deixa cargo",
+        "demissão de", "contratação de", "nomeado", "nomeada",
+        "presidente executivo", "vice-presidente executivo"
+      ]
+    },
+
+    {
+      "nome": "ratings_analises_bancarias",
+      "descricao": "Upgrades e downgrades por S&P, Moody's, Fitch e casas sell-side",
+      "peso": 4,
+      "palavras": [
+        "rating", "rebaixa", "eleva nota", "downgrade", "upgrade",
+        "perspectiva negativa", "perspectiva estável", "perspectiva positiva",
+        "s&p", "moody", "fitch", "bank of america", "bofa",
+        "top pick", "recomendação de venda", "recomendação de compra",
+        "capitalização", "capital de nível", "tier 1", "tier 2",
+        "risco de liquidação", "adequação de capital"
+      ]
+    },
+
+    {
+      "nome": "ia_setor_financeiro",
+      "descricao": "IA aplicada a bancos, fintechs, crédito e pagamentos",
+      "peso": 4,
+      "palavras": [
+        "inteligência artificial", "machine learning", "llm",
+        "openai", "anthropic", "gpt", "modelo de linguagem",
+        "ia generativa", "gen ai", "genai",
+        "retorno da ia", "adoção de ia",
+        "automação de crédito", "análise de crédito automatizada",
+        "score por ia", "fraude com ia", "detecção de fraude"
+      ]
+    },
+
+    {
+      "nome": "regulacao_bancaria_internacional",
+      "descricao": "BIS, regulação cross-border, expansão internacional de bancos BR",
+      "peso": 3,
+      "palavras": [
+        "bis", "bank for international settlements",
+        "sanção", "sanções", "ofac",
+        "filial no exterior", "filial nos eua", "operação internacional",
+        "expansão internacional", "licença no exterior",
+        "basileia", "basiléia", "acordo de basileia"
+      ]
+    },
+
+    {
+      "nome": "macro_mercado_financeiro",
+      "descricao": "Câmbio, Ibovespa, juros — movimentos de mercado com impacto no crédito",
+      "peso": 2,
+      "palavras": [
+        "dólar", "câmbio", "ibovespa", "taxas futuras",
+        "bônus soberano", "cds", "risco-país",
+        "inflação", "ipca", "igpm"
+      ]
+    },
+
+    {
+      "nome": "esg_credito_sustentavel",
+      "descricao": "Crédito sustentável, ESG, finanças verdes",
+      "peso": 2,
+      "palavras": [
+        "crédito sustentável", "esg", "verde", "sustentável",
+        "emissão verde", "green bond", "finanças sustentáveis",
+        "taxonomia verde", "carbono"
+      ]
+    }
+
+  ],
+
+  "entidades_prioritarias": {
+    "descricao": "Sistema de bônus em 3 tiers. Tier 1 = empresa do Roberto (+6). Tier 2 = concorrentes diretos (+4). Tier 3 = incumbentes, reguladores e outros relevantes (+3).",
+
+    "tier1_empresa": {
+      "bonus": 6,
+      "descricao": "Empresa do Roberto — qualquer notícia sobre MP ou MELI é máxima prioridade",
+      "lista": [
+        "mercado pago", "mercadopago", "mercado livre", "mercadolivre",
+        "meli", "mercado crédito", "mercado credito",
+        "mercado shops", "mercado envios"
+      ]
+    },
+
+    "tier2_concorrentes_diretos": {
+      "bonus": 4,
+      "descricao": "Concorrentes diretos de crédito PF, adquirência e banco digital",
+      "lista": [
+        "nubank", "nu ", "nu bank", "nu holdings",
+        "pagseguro", "pagbank", "pag bank",
+        "picpay", "pic pay",
+        "c6 bank", "c6bank",
+        "stone", "stoneco",
+        "cielo",
+        "rede ",
+        "infinitepay",
+        "getnet",
+        "neon",
+        "banco inter", "inter&co"
+      ]
+    },
+
+    "tier3_relevantes": {
+      "bonus": 3,
+      "descricao": "Bancos incumbentes, reguladores, agências de rating e outros",
+      "lista": [
+        "itaú", "itau", "itaú unibanco",
+        "bradesco",
+        "santander",
+        "banco do brasil", "bb ",
+        "caixa econômica", "caixa economica",
+        "btg", "btg pactual",
+        "brb",
+        "banco central", "bcb", "bacen",
+        "tesouro nacional", "cvm", "febraban",
+        "s&p", "moody", "fitch",
+        "bank of america", "bofa",
+        "galípolo", "galipolo", "campos neto",
+        "serasa", "boa vista", "spc",
+        "cndl", "quod", "cnc",
+        "realize", "creditas", "sumup"
+      ]
+    }
+  },
+
+  "penalizacoes": [
+    {
+      "nome": "agronegocio_puro",
+      "descricao": "Agronegócio sem relação com crédito ou bancos",
+      "peso": -3,
+      "palavras": [
+        "safra", "soja", "milho", "boi gordo", "café arábica",
+        "açúcar", "etanol de cana", "agropecuária", "pecuária",
+        "fertilizante", "defensivo agrícola", "colheita"
+      ]
+    }
+  ],
+
+  "historico_exemplos": [
+    "Com saída do CFO, BofA corta Nubank para 'venda'; Santander retira 'top pick'",
+    "BREAKING: Nubank troca CFO: Lago vai empreender; novo nome vem da Visa",
+    "Galípolo participa de evento do BIS em Xangai, na próxima semana",
+    "Banco Inter obtém autorização para começar a operar filial nos EUA",
+    "EUA só sancionaram bancos do México entre seis países latinos com grupos designados como terroristas",
+    "Bancos aumentam carteira em crédito sustentável",
+    "Riscos crescem, ameaçam cortes na Selic e levam juros futuros à máxima do ano",
+    "Crédito com garantia do governo para motos ficará perto de R$ 5 bi",
+    "Realize, da Lojas Renner, tem novo diretor-presidente",
+    "Apenas 5% das instituições financeiras conseguem medir retorno da IA, diz Accenture",
+    "Risco de nova intervenção do Tesouro paira sobre o mercado de juros",
+    "Dólar fecha acima de R$ 5,15, taxas futuras disparam e Ibovespa cai com maior chance de alta dos juros americanos",
+    "Juros vão às máximas em mais de 1 ano após 'payroll'; mercado já vê chance majoritária de manutenção da Selic",
+    "S&P rebaixa rating do BRB e diz que possíveis descompassos na capitalização podem elevar risco de liquidação",
+    "Anthropic pede que laboratórios de IA considerem pausa no desenvolvimento e alerta que humanos podem perder o controle"
+  ]
+}

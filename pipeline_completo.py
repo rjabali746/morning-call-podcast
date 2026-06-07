@@ -189,6 +189,7 @@ def etapa_scraping() -> str:
     from valor_economico_scraper import (
         buscar_noticias,
         enriquecer_artigos,
+        selecionar_por_tempo,
         formatar_para_podcast,
         HEADERS,
     )
@@ -226,7 +227,7 @@ def etapa_scraping() -> str:
         log.info(f"  🔄 {repetidos} artigo(s) já usados removidos — {len(noticias_novas)} novos")
     if not noticias_novas:
         log.warning("  ⚠️  Todos os artigos já foram usados — incluindo os mais recentes mesmo assim")
-        noticias_novas = noticias[:5]
+        noticias_novas = noticias[:10]
 
     # Salvar TODOS os artigos encontrados neste scrape (não só os top 5).
     # Isso garante que artigos rankeados abaixo de top-5 também sejam marcados
@@ -238,9 +239,17 @@ def etapa_scraping() -> str:
     log.info(f"  💾 Histórico atualizado: {len(todas_used)} artigos no total")
 
     noticias = noticias_novas
-    noticias  = enriquecer_artigos(session, noticias, top=5, cookies_list=cookies_list)
+
+    # Enriquecer até top 10 candidatos com conteúdo completo via Selenium
+    noticias = enriquecer_artigos(session, noticias, top=10, cookies_list=cookies_list)
+
     with open(used_file, "w", encoding="utf-8") as f:
         json.dump(todas_used, f, ensure_ascii=False, indent=2)
+
+    # Selecionar quantas notícias cabem em até 20 minutos (ordenadas por score)
+    log.info("  ⏱️  Selecionando notícias por tempo (máx 20 min)...")
+    noticias_selecionadas = selecionar_por_tempo(noticias)
+    log.info(f"  🎙️  {len(noticias_selecionadas)} notícias selecionadas para o episódio")
 
     ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -248,12 +257,12 @@ def etapa_scraping() -> str:
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(noticias[:10], f, ensure_ascii=False, indent=2)
 
-    texto    = formatar_para_podcast(noticias, max_noticias=5)
+    texto    = formatar_para_podcast(noticias_selecionadas)
     txt_path = BASE / f"texto_episodio_{ts}.txt"
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(texto)
 
-    log.info(f"  ✅ {len(noticias)} notícias | roteiro: {txt_path.name}")
+    log.info(f"  ✅ {len(noticias_selecionadas)} notícias no episódio | roteiro: {txt_path.name}")
     return str(txt_path)
 
 
