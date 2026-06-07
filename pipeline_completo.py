@@ -88,6 +88,41 @@ def load_config() -> dict:
     raise RuntimeError("Nenhuma configuração encontrada (env vars ou config.json)")
 
 
+def baixar_historico_do_github(config: dict):
+    """
+    Baixa used_articles.json diretamente da API do GitHub.
+    Garante que a deduplicação funciona independente do estado do checkout.
+    """
+    import requests as req
+    import base64 as b64
+
+    gh_cfg  = config["github"]
+    token   = os.environ.get("GH_TOKEN") or gh_cfg.get("token", "")
+    usuario = gh_cfg["usuario"]
+    repo    = gh_cfg["repo"]
+
+    if not token:
+        return
+
+    url     = f"https://api.github.com/repos/{usuario}/{repo}/contents/used_articles.json"
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+
+    try:
+        r = req.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            content = b64.b64decode(r.json()["content"]).decode("utf-8")
+            with open(BASE / "used_articles.json", "w", encoding="utf-8") as f:
+                f.write(content)
+            n = len(json.loads(content))
+            log.info(f"  📥 Histórico baixado do GitHub: {n} artigos já usados")
+        elif r.status_code == 404:
+            log.info("  📥 Histórico ainda não existe — primeiro episódio")
+        else:
+            log.warning(f"  ⚠️  Não foi possível baixar histórico: HTTP {r.status_code}")
+    except Exception as e:
+        log.warning(f"  ⚠️  Erro ao baixar histórico: {e}")
+
+
 def preparar_cookies():
     """
     GitHub Actions: escreve cookies a partir de VALOR_COOKIES_JSON.
@@ -396,6 +431,7 @@ def main():
 
     config = load_config()
     preparar_cookies()
+    baixar_historico_do_github(config)   # garante deduplicação mesmo após fresh checkout
 
     # ── ETAPA 1: Scraping ────────────────────────────────────────────────────
     log.info("\n── ETAPA 1/3: SCRAPING ─────────────────────────────────────")
