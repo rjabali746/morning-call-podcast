@@ -169,11 +169,39 @@ def etapa_scraping() -> str:
         for c in cookies_list:
             session.cookies.set(c["name"], c["value"], domain=c.get("domain", ""))
 
+    # ── Carregar URLs já usadas em episódios anteriores ──────────────────────
+    used_file = BASE / "used_articles.json"
+    used_urls = set()
+    if used_file.exists():
+        try:
+            with open(used_file) as f:
+                used_urls = set(json.load(f))
+            log.info(f"  📚 {len(used_urls)} artigos já usados em episódios anteriores")
+        except Exception:
+            pass
+
     noticias = buscar_noticias(session)
     if not noticias:
         raise ValueError("Nenhuma notícia encontrada")
 
+    # ── Filtrar artigos já usados ─────────────────────────────────────────────
+    noticias_novas = [n for n in noticias if n.get("link") not in used_urls]
+    repetidos = len(noticias) - len(noticias_novas)
+    if repetidos:
+        log.info(f"  🔄 {repetidos} artigo(s) já usados removidos — {len(noticias_novas)} novos")
+    if not noticias_novas:
+        log.warning("  ⚠️  Todos os artigos já foram usados — incluindo os mais recentes mesmo assim")
+        noticias_novas = noticias[:5]
+    noticias = noticias_novas
+
     noticias  = enriquecer_artigos(session, noticias, top=5, cookies_list=cookies_list)
+
+    # ── Salvar URLs usadas neste episódio ─────────────────────────────────────
+    todas_used = list(used_urls | {n["link"] for n in noticias[:5] if n.get("link")})
+    todas_used = todas_used[-150:]  # limitar histórico a 150 artigos (~30 dias)
+    with open(used_file, "w", encoding="utf-8") as f:
+        json.dump(todas_used, f, ensure_ascii=False, indent=2)
+
     ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     json_path = BASE / f"noticias_valor_{ts}.json"
@@ -338,6 +366,15 @@ def etapa_publicacao(mp3_path: str, config: dict):
 
     with open(BASE / "feed.xml", "w", encoding="utf-8") as f:
         f.write(feed_xml)
+
+    # Salvar histórico de artigos usados (evita repetição nos próximos episódios)
+    used_file = BASE / "used_articles.json"
+    if used_file.exists():
+        gh.upload_arquivo(
+            caminho_local   = str(used_file),
+            caminho_repo    = "used_articles.json",
+            mensagem_commit = f"📝 Histórico de artigos — {titulo_ep}",
+        )
 
     log.info(f"  ✅ Publicado!")
     log.info(f"     🔊 {pages_url}/audio/{nome_mp3}")
