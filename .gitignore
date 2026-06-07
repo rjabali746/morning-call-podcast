@@ -1,0 +1,20 @@
+# Secrets — nunca enviar ao GitHub
+config.json
+valor_cookies.json
+
+# Arquivos gerados (ficam localmente, não no repo de scripts)
+noticias_valor_*.json
+texto_episodio_*.txt
+audio/*.mp3
+pipeline.log
+automacao.log
+artigo_diagnostico.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# macOS
+.DS_Store

@@ -1,0 +1,78 @@
+name: 🎙️ Morning Call Jabali
+
+# ─── Agendamento ─────────────────────────────────────────────────────────────
+# Horário: 6:30 AM BRT (Brasília) = 9:30 AM UTC
+# Dias: segunda a sexta
+on:
+  schedule:
+    - cron: '30 9 * * 1-5'
+
+  # Gatilho manual (para testar ou forçar episódio extra)
+  workflow_dispatch:
+    inputs:
+      motivo:
+        description: 'Motivo do disparo manual (opcional)'
+        required: false
+        default: 'Disparo manual'
+
+# ─── Permissões ───────────────────────────────────────────────────────────────
+permissions:
+  contents: write   # necessário para fazer commit do MP3 e feed.xml
+
+# ─── Job principal ────────────────────────────────────────────────────────────
+jobs:
+  gerar-podcast:
+    name: Gerar e publicar episódio
+    runs-on: ubuntu-latest
+    timeout-minutes: 30   # aborta se travar por mais de 30 min
+
+    steps:
+
+      # 1. Baixar o código do repositório
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      # 2. Python 3.11
+      - name: 🐍 Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # 3. Dependências Python
+      - name: 📦 Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 4. Google Chrome (para Selenium + paywall do Valor)
+      - name: 🌐 Instalar Google Chrome
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y google-chrome-stable
+          echo "Chrome: $(google-chrome --version)"
+
+      # 5. Escrever cookies do Valor (armazenados como Secret)
+      - name: 🍪 Preparar cookies do Valor Econômico
+        run: |
+          echo '${{ secrets.VALOR_COOKIES_JSON }}' > valor_cookies.json
+          echo "✅ Cookies prontos"
+
+      # 6. Executar o pipeline completo
+      - name: 🚀 Executar pipeline
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          GH_TOKEN:           ${{ secrets.GITHUB_TOKEN }}
+          GH_USUARIO:         rjabali746
+          GH_REPO:            morning-call-podcast
+          GH_PAGES_URL:       https://rjabali746.github.io/morning-call-podcast
+        run: python pipeline_completo.py
+
+      # 7. Salvar log como artefato em caso de falha (útil para diagnóstico)
+      - name: 📋 Salvar log de erro
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-log-${{ github.run_id }}
+          path: pipeline.log
+          retention-days: 14
