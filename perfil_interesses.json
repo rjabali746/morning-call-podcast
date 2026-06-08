@@ -48,7 +48,7 @@
       "peso": 7,
       "palavras": [
         "adquirente", "adquirência", "adquirencia",
-        "maquininha", "maquininhas", "pos", "tef",
+        "maquininha", "maquininhas", "terminal pos", "terminal de pagamento", "tef pagamento",
         "taxa de desconto", "mdr", "interchange",
         "credenciamento", "credenciamento de lojistas",
         "split de pagamento", "split payment",
@@ -59,8 +59,8 @@
         "subadquirente", "facilitador de pagamento",
         "isv", "iso", "agente de pagamento",
         "meios de pagamento", "meio de pagamento",
-        "bandeira", "visa", "mastercard", "elo", "hipercard",
-        "débito", "débito automático", "boleto",
+        "bandeira de cartão", "visa cartão", "mastercard", "elo cartão", "bandeira elo", "hipercard",
+        "débito automático", "boleto bancário",
         "pix parcelado", "pix crédito",
         "regulação de pagamentos", "ecossistema de pagamentos",
         "arranjo de pagamento", "câmara de compensação",
@@ -199,9 +199,10 @@
         "inteligência artificial", "machine learning", "llm",
         "openai", "anthropic", "gpt", "modelo de linguagem",
         "ia generativa", "gen ai", "genai",
-        "retorno da ia", "adoção de ia",
+        "retorno da ia", "adoção de ia", "uso de ia",
         "automação de crédito", "análise de crédito automatizada",
-        "score por ia", "fraude com ia", "detecção de fraude"
+        "score por ia", "fraude com ia", "detecção de fraude",
+        "ia no setor financeiro", "ia em bancos", "ia financeira"
       ]
     },
 
@@ -300,11 +301,45 @@
     {
       "nome": "agronegocio_puro",
       "descricao": "Agronegócio sem relação com crédito ou bancos",
-      "peso": -3,
+      "peso": -4,
       "palavras": [
         "safra", "soja", "milho", "boi gordo", "café arábica",
         "açúcar", "etanol de cana", "agropecuária", "pecuária",
         "fertilizante", "defensivo agrícola", "colheita"
+      ]
+    },
+    {
+      "nome": "esportes",
+      "descricao": "Notícias esportivas sem relação com patrocínio ou negócios financeiros",
+      "peso": -5,
+      "palavras": [
+        "roland garros", "wimbledon", "us open", "australian open",
+        "tênis atp", "tênis wta", "grand slam",
+        "copa do mundo", "champions league", "premier league",
+        "fórmula 1", "moto gp",
+        "campeonato brasileiro", "libertadores",
+        "nba", "nfl", "mlb",
+        "olimpíadas", "paralimpíadas"
+      ]
+    },
+    {
+      "nome": "aviacao_sem_nexo_financeiro",
+      "descricao": "Aviação comercial sem relação com crédito, IPO ou M&A financeiro",
+      "peso": -3,
+      "palavras": [
+        "companhia aérea", "rota aérea", "aeronave", "boeing 737",
+        "airbus a320", "slots aeroportuários", "anac aprova",
+        "frequências de voo", "malha aérea"
+      ]
+    },
+    {
+      "nome": "entretenimento_midia",
+      "descricao": "Entretenimento, mídia e cultura sem nexo financeiro",
+      "peso": -4,
+      "palavras": [
+        "bilheteria", "streaming de música", "oscar",
+        "grammy", "emmy", "festival de cinema",
+        "temporada de série", "lançamento de álbum"
       ]
     }
   ],

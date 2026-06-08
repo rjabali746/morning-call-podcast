@@ -98,8 +98,13 @@ def carregar_perfil():
         try:
             with open(PERFIL_FILE, "r", encoding="utf-8") as f:
                 _perfil_cache = json.load(f)
+            ent_cfg = _perfil_cache.get("entidades_prioritarias", {})
+            total_ent = sum(
+                len(ent_cfg.get(t, {}).get("lista", []))
+                for t in ("tier1_empresa", "tier2_concorrentes_diretos", "tier3_relevantes")
+            )
             print(f"  ✅ Perfil de interesses carregado ({len(_perfil_cache.get('temas', []))} temas, "
-                  f"{len(_perfil_cache.get('entidades_prioritarias', {}).get('lista', []))} entidades prioritárias)")
+                  f"{total_ent} entidades em 3 tiers)")
             return _perfil_cache
         except Exception as e:
             print(f"  ⚠️  Erro ao carregar perfil_interesses.json: {e}")
@@ -509,52 +514,62 @@ def buscar_noticias(session):
 # SELEÇÃO POR TEMPO
 # ============================================================================
 
-def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST):
+def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST, min_score=6):
     """
-    Seleciona notícias em ordem de score de relevância até o limite de tempo.
+    Seleciona notícias enriquecidas em ordem de score até o limite de tempo.
 
-    Algoritmo:
-    1. Parte das notícias JÁ ordenadas por score (maior → menor).
-    2. Estima as palavras que cada notícia vai gerar no script (título + resumo).
-    3. Adiciona notícias greedy até que a próxima ultrapassaria max_min.
-    4. Loga quantas foram incluídas e o tempo estimado.
+    Regras:
+    1. Só inclui artigos com score_relevancia ≥ min_score (filtra ruído).
+    2. Como a lista JÁ está ordenada por score (maior → menor), ao encontrar
+       o primeiro artigo abaixo do limiar encerra — todos os seguintes também estarão.
+    3. Adiciona greedy até que a próxima notícia ultrapassaria max_min.
 
-    Referência de calibração:
+    Referência de calibração (com MAX_CHARS_RESUMO=1500 chars ≈ 250 palavras):
       • Intro + outro:  ~70 palavras fixas
       • Por notícia:    título (~10 pal) + overhead (~5 pal) + resumo (~250 pal) ≈ 265 pal
-      • 10 notícias:    70 + 10×265 = 2720 pal ≈ 19.4 min  ← perto do teto de 20 min
-      •  5 notícias:    70 +  5×265 = 1395 pal ≈ 10.0 min  ← atual baseline
+      • 10 notícias:    70 + 10×265 ≈ 2720 pal ≈ 19.4 min  ← teto
+      •  8 notícias:    70 +  8×265 ≈ 2190 pal ≈ 15.6 min  ← alvo
     """
     max_palavras = max_min * wpm
     palavras_usadas = _PALAVRAS_INTRO_OUTRO
     selecionadas = []
+    ignoradas_score = 0
 
     for n in noticias:
+        score = n.get("score_relevancia", 0)
+
+        # Lista ordenada por score: primeiro artigo abaixo do limiar encerra
+        if score < min_score:
+            ignoradas_score += 1
+            break
+
         conteudo = n.get("conteudo_completo") or n.get("resumo") or ""
         resumo   = resumir_noticia(conteudo, max_chars=MAX_CHARS_RESUMO)
         titulo   = n.get("titulo", "")
 
-        # Estimar palavras: título + "Notícia N. " (overhead) + resumo narrado
         palavras_noticia = len(titulo.split()) + 5 + len(resumo.split())
 
         if palavras_usadas + palavras_noticia > max_palavras:
-            break  # esta notícia ultrapassaria o limite — para aqui
+            break  # próxima notícia ultrapassaria o limite de tempo
 
-        palavras_usadas  += palavras_noticia
+        palavras_usadas += palavras_noticia
         selecionadas.append(n)
 
-    tempo_min  = palavras_usadas / wpm
-    tempo_seg  = int((tempo_min % 1) * 60)
-    tempo_str  = f"{int(tempo_min)}min{tempo_seg:02d}s"
+    tempo_min = palavras_usadas / wpm
+    tempo_seg = int((tempo_min % 1) * 60)
+    tempo_str = f"{int(tempo_min)}min{tempo_seg:02d}s"
 
-    print(f"\n  ⏱️  Seleção por tempo: {len(selecionadas)} notícias selecionadas")
-    print(f"       Duração estimada: ~{tempo_str}  "
-          f"({palavras_usadas} palavras @ {wpm} wpm | limite: {max_min} min)")
+    print(f"\n  ⏱️  Seleção por tempo: {len(selecionadas)} notícias selecionadas"
+          f"  (min_score={min_score}, max={max_min}min)")
+    print(f"       Duração estimada: ~{tempo_str}"
+          f"  ({palavras_usadas} palavras @ {wpm} wpm)")
+    if ignoradas_score:
+        print(f"       {ignoradas_score} artigo(s) ignorados por score < {min_score}")
     for i, n in enumerate(selecionadas, 1):
-        score = n.get("score_relevancia", "?")
-        icone = "🔴" if isinstance(score, int) and score >= 14 else (
-                "🟡" if isinstance(score, int) and score >= 8  else "⚪")
-        print(f"       {i}. {icone} [{score:>3}pts] {n['titulo'][:65]}")
+        sc = n.get("score_relevancia", "?")
+        icone = "🔴" if isinstance(sc, int) and sc >= 14 else (
+                "🟡" if isinstance(sc, int) and sc >= 8  else "⚪")
+        print(f"       {i}. {icone} [{sc:>3}pts] {n['titulo'][:65]}")
 
     return selecionadas
 

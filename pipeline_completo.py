@@ -246,9 +246,10 @@ def etapa_scraping() -> str:
     with open(used_file, "w", encoding="utf-8") as f:
         json.dump(todas_used, f, ensure_ascii=False, indent=2)
 
-    # Selecionar quantas notícias cabem em até 20 minutos (ordenadas por score)
-    log.info("  ⏱️  Selecionando notícias por tempo (máx 20 min)...")
-    noticias_selecionadas = selecionar_por_tempo(noticias)
+    # Selecionar por tempo apenas entre os artigos enriquecidos (top 10).
+    # Artigos além do top-10 não têm conteúdo completo e distorceriam a estimativa.
+    log.info("  ⏱️  Selecionando notícias por tempo (máx 20 min, min score 6)...")
+    noticias_selecionadas = selecionar_por_tempo(noticias[:10])
     log.info(f"  🎙️  {len(noticias_selecionadas)} notícias selecionadas para o episódio")
 
     ts        = datetime.now().strftime("%Y%m%d_%H%M%S")

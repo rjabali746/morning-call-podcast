@@ -1,11 +1,12 @@
 name: 🎙️ Morning Call Jabali
 
 # ─── Agendamento ─────────────────────────────────────────────────────────────
-# Horário: 6:30 AM BRT (Brasília) = 9:30 AM UTC
+# Horário: 6:17 AM BRT (Brasília) = 9:17 AM UTC
+# Minuto ímpar (17) evita pico de carga do GitHub nos horários cheios (:00, :30)
 # Dias: segunda a sexta
 on:
   schedule:
-    - cron: '30 9 * * 1-5'
+    - cron: '17 9 * * 1-5'
 
   # Gatilho manual (para testar ou forçar episódio extra)
   workflow_dispatch:
