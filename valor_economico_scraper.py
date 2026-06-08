@@ -39,7 +39,7 @@ PERFIL_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perfil
 
 # ── Parâmetros de tempo do podcast ────────────────────────────────────────────
 WPM_PODCAST      = 140   # palavras por minuto narradas em português (ElevenLabs)
-MAX_MIN_PODCAST  = 20    # duração máxima do episódio em minutos
+MAX_MIN_PODCAST  = 10    # duração máxima do episódio em minutos
 MAX_CHARS_RESUMO = 1500  # caracteres máx por resumo de notícia (~250 palavras)
 # Palavras fixas de intro + outro (estimativa)
 _PALAVRAS_INTRO_OUTRO = 70
@@ -527,8 +527,8 @@ def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST, min
     Referência de calibração (com MAX_CHARS_RESUMO=1500 chars ≈ 250 palavras):
       • Intro + outro:  ~70 palavras fixas
       • Por notícia:    título (~10 pal) + overhead (~5 pal) + resumo (~250 pal) ≈ 265 pal
-      • 10 notícias:    70 + 10×265 ≈ 2720 pal ≈ 19.4 min  ← teto
-      •  8 notícias:    70 +  8×265 ≈ 2190 pal ≈ 15.6 min  ← alvo
+      • 5 notícias:     70 +  5×265 ≈ 1395 pal ≈  9.9 min  ← alvo (teto = 10 min)
+      • 6 notícias:     70 +  6×265 ≈ 1660 pal ≈ 11.9 min  ← ultrapassa o teto
     """
     max_palavras = max_min * wpm
     palavras_usadas = _PALAVRAS_INTRO_OUTRO
@@ -934,7 +934,7 @@ def main():
     print(f"\n💾 JSON: {json_file}")
 
     # Salvar texto do podcast
-    texto = formatar_para_podcast(noticias, max_noticias=5)
+    texto = formatar_para_podcast(noticias[:10])
     txt_file = os.path.join(base, f"texto_episodio_{ts}.txt")
     with open(txt_file, "w", encoding="utf-8") as f:
         f.write(texto)

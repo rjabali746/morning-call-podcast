@@ -248,7 +248,7 @@ def etapa_scraping() -> str:
 
     # Selecionar por tempo apenas entre os artigos enriquecidos (top 10).
     # Artigos além do top-10 não têm conteúdo completo e distorceriam a estimativa.
-    log.info("  ⏱️  Selecionando notícias por tempo (máx 20 min, min score 6)...")
+    log.info("  ⏱️  Selecionando notícias por tempo (máx 10 min, min score 6, top-5 conteúdo completo)...")
     noticias_selecionadas = selecionar_por_tempo(noticias[:10])
     log.info(f"  🎙️  {len(noticias_selecionadas)} notícias selecionadas para o episódio")
 
@@ -463,7 +463,7 @@ def main():
             log.error("❌ Sem fallback disponível. Pipeline abortado.")
             sys.exit(1)
         from valor_economico_scraper import formatar_para_podcast
-        texto    = formatar_para_podcast(noticias_fb, max_noticias=5)
+        texto    = formatar_para_podcast(noticias_fb[:10])
         ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
         txt_path = str(BASE / f"texto_episodio_{ts}.txt")
         with open(txt_path, "w", encoding="utf-8") as f:
