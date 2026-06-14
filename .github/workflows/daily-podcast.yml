@@ -1,20 +1,17 @@
 name: 🎙️ Morning Call Jabali
 
-# ─── Agendamento ─────────────────────────────────────────────────────────────
-# Horário: 6:17 AM BRT (Brasília) = 9:17 AM UTC
-# Minuto ímpar (17) evita pico de carga do GitHub nos horários cheios (:00, :30)
-# Dias: segunda a sexta
+# ─── Gatilho ─────────────────────────────────────────────────────────────────
+# O agendamento é feito externamente via cron-job.org (6:17 AM BRT, seg–sex)
+# que dispara este workflow via HTTP POST na API do GitHub.
+# Isso garante pontualidade independente do estado da fila do GitHub Actions.
 on:
-  schedule:
-    - cron: '17 9 * * 1-5'
-
-  # Gatilho manual (para testar ou forçar episódio extra)
+  # Gatilho via API externa (cron-job.org) ou manual pelo painel do GitHub
   workflow_dispatch:
     inputs:
       motivo:
-        description: 'Motivo do disparo manual (opcional)'
+        description: 'Motivo do disparo (opcional)'
         required: false
-        default: 'Disparo manual'
+        default: 'Disparo automático via cron-job.org'
 
 # ─── Permissões ───────────────────────────────────────────────────────────────
 permissions:
