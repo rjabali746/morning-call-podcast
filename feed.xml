@@ -17,14 +17,26 @@
       <link>https://rjabali746.github.io/morning-call-podcast</link>
     </image>
     <item>
+      <title>Morning Call - 23/06/2026</title>
+      <description>Principais notícias de crédito e finanças - Morning Call - 23/06/2026</description>
+      <pubDate>Tue, 23 Jun 2026 09:19:02 +0000</pubDate>
+      <guid isPermaLink="false">https://rjabali746.github.io/morning-call-podcast/audio/podcast_20260623_091902.mp3</guid>
+      <enclosure url="https://rjabali746.github.io/morning-call-podcast/audio/podcast_20260623_091902.mp3"
+                 length="5822633"
+                 type="audio/mpeg"/>
+      <itunes:duration>6:03</itunes:duration>
+      <itunes:explicit>false</itunes:explicit>
+      <itunes:author>Roberto Jabali</itunes:author>
+    </item>
+    <item>
       <title>Morning Call - 22/06/2026</title>
       <description>Principais notícias de crédito e finanças - Morning Call - 22/06/2026</description>
       <pubDate>Mon, 22 Jun 2026 09:20:39 +0000</pubDate>
       <guid isPermaLink="false">https://rjabali746.github.io/morning-call-podcast/audio/podcast_20260622_092039.mp3</guid>
       <enclosure url="https://rjabali746.github.io/morning-call-podcast/audio/podcast_20260622_092039.mp3"
-                 length="10364221"
+                 length="0"
                  type="audio/mpeg"/>
-      <itunes:duration>10:47</itunes:duration>
+      <itunes:duration>10:00</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
       <itunes:author>Roberto Jabali</itunes:author>
     </item>
