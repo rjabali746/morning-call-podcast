@@ -32,8 +32,10 @@ import os
 import re
 import sys
 import json
+import html
 import shutil
 import datetime
+import urllib.request
 from collections import Counter
 
 BASE        = os.path.dirname(os.path.abspath(__file__))
@@ -113,6 +115,69 @@ def limpar_manchete(texto):
     t = _URL_RE.sub(" ", texto)
     t = re.sub(r"\s+", " ", t).strip()
     return t
+
+
+def _parece_url(texto):
+    """URL = célula sem espaços que aponta para http/www ou um domínio."""
+    t = (texto or "").strip()
+    if " " in t:
+        return bool(re.match(r"(?:https?://|www\.)", t, re.I))
+    return bool(re.match(r"(?:https?://|www\.)", t, re.I)
+                or re.search(r"\b[\w-]+\.[a-z]{2,}(?:/|$)", t, re.I))
+
+
+def _titulo_via_pagina(url):
+    """Tenta o título real da matéria (og:title / <title>) — público mesmo em
+    matéria paga. Retorna '' se não conseguir."""
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 (morning-call-bot)"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        raw = r.read(200_000).decode("utf-8", errors="replace")
+    padroes = (
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+name=["\']title["\'][^>]+content=["\']([^"\']+)',
+        r"<title[^>]*>([^<]+)</title>",
+    )
+    for pat in padroes:
+        m = re.search(pat, raw, re.I)
+        if m:
+            t = html.unescape(m.group(1)).strip()
+            # remove o sufixo do veículo: " | Valor Econômico", " - Valor"
+            t = re.split(r"\s*[|\-–—]\s*(?:valor|globo)\b", t, flags=re.I)[0].strip()
+            if t:
+                return t
+    return ""
+
+
+def _titulo_via_slug(url):
+    """Plano B: deriva o título do 'slug' da URL (último trecho antes de .ghtml)."""
+    caminho = re.sub(r"[?#].*$", "", url.strip())
+    seg = caminho.rstrip("/").split("/")[-1]
+    seg = re.sub(r"\.(?:ghtml|s?html?|php|aspx)$", "", seg, flags=re.I)
+    seg = seg.replace("-", " ").replace("_", " ")
+    return re.sub(r"\s+", " ", seg).strip()
+
+
+def resolver_manchete(texto):
+    """Se a célula for uma URL, devolve a manchete real da matéria; senão,
+    devolve o próprio texto. Nunca lança exceção (fluxo à prova de falha)."""
+    if not _parece_url(texto):
+        return texto
+    url = texto.strip()
+    if not url.lower().startswith("http"):
+        url = "https://" + url
+    try:
+        titulo = _titulo_via_pagina(url)
+        if titulo:
+            return titulo
+    except Exception:
+        pass
+    return _titulo_via_slug(url)
+
+
+def preparar_manchete(texto):
+    """Resolve URL → manchete e remove qualquer ruído de página remanescente."""
+    return limpar_manchete(resolver_manchete(texto))
 
 # ---------------------------------------------------------------------------
 # Pontuação — réplica fiel de calcular_score_perfil() do valor_economico_scraper.py
@@ -275,9 +340,9 @@ def analisar(perfil, gostei, nao):
     """
     ja = palavras_ja_no_perfil(perfil)
 
-    # Blindagem: remove URLs/ruído de página antes de pontuar e extrair termos.
-    gostei = [m for m in (limpar_manchete(x) for x in gostei) if m]
-    nao    = [m for m in (limpar_manchete(x) for x in nao)    if m]
+    # Se a célula for uma URL, resolve para a manchete real; senão limpa ruído.
+    gostei = [m for m in (preparar_manchete(x) for x in gostei) if m]
+    nao    = [m for m in (preparar_manchete(x) for x in nao)    if m]
 
     bem, novidades = [], []
     cand = Counter()
