@@ -10,6 +10,12 @@ pipeline.log
 automacao.log
 artigo_diagnostico.html
 
+# Backups locais do perfil (gerados por aprender_perfil.py) — não versionar
+perfil_interesses.backup-*.json
+
+# Caixa de entrada local de manchetes (o fluxo oficial é a Planilha Google)
+manchetes_favoritas.txt
+
 # Python
 __pycache__/
 *.pyc

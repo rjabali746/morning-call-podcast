@@ -58,6 +58,27 @@ jobs:
           echo '${{ secrets.VALOR_COOKIES_JSON }}' > valor_cookies.json
           echo "✅ Cookies prontos"
 
+      # 5b. Aprender com as manchetes favoritas (Planilha Google) e refinar o perfil
+      - name: 🧠 Aprender com manchetes favoritas
+        continue-on-error: true   # aprendizado é opcional; nunca quebra o episódio
+        env:
+          FAVORITAS_CSV_URL: ${{ secrets.FAVORITAS_CSV_URL }}
+        run: python sincronizar_favoritas.py
+
+      # 5c. Commitar de volta o perfil aprendido (histórico = backup)
+      - name: 💾 Salvar perfil aprendido
+        continue-on-error: true
+        run: |
+          git config user.name  "morning-call-bot"
+          git config user.email "morning-call-bot@users.noreply.github.com"
+          git add -- perfil_interesses.json manchetes_processadas.log 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Nenhuma mudança no perfil — nada a commitar."
+          else
+            git commit -m "🧠 Aprendizado automático do perfil de interesses"
+            git push
+          fi
+
       # 6. Executar o pipeline completo
       - name: 🚀 Executar pipeline
         env:
