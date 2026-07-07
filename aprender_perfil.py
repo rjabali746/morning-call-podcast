@@ -81,6 +81,39 @@ GENERICOS = {
     "fraco", "trimestre", "semestre", "balanço", "balanco",
 }
 
+# Ruído de WEB: pedaços de URL e "chamadas" de página que NÃO são termos de
+# interesse. Se alguém colar a URL/o conteúdo bruto da matéria (em vez de só a
+# manchete), estes tokens não podem virar tema. Ex.: "https valor", "mercados
+# ghtml", "financas vivo", "siga ao vivo".
+WEB_BOILERPLATE = {
+    "http", "https", "www", "com", "net", "org", "gov", "globo", "valor",
+    "ghtml", "html", "htm", "shtml", "php", "aspx", "amp", "utm",
+    "post", "posts", "blog", "feed", "rss", "index", "home", "page", "pagina",
+    "siga", "acompanhe", "assista", "assine", "leia", "veja", "confira",
+    "clique", "compartilhe", "vivo", "aovivo", "minuto", "minutos",
+    "noticia", "noticias", "materia", "materias", "coluna", "colunas",
+}
+
+# Detecta URLs (com ou sem http) para removê-las antes de extrair termos.
+_URL_RE = re.compile(
+    r"(?:https?://|www\.)\S+"
+    r"|\b\S+\.(?:com|br|net|org|gov|io|ghtml|html|htm)\b(?:/\S*)?",
+    re.IGNORECASE,
+)
+
+
+def limpar_manchete(texto):
+    """Remove URLs e ruído de página, devolvendo só o texto legível da manchete.
+
+    Blinda o aprendizado contra o caso em que a pessoa cola a URL (ou o conteúdo
+    bruto) da matéria na planilha, em vez de só o título.
+    """
+    if not texto:
+        return ""
+    t = _URL_RE.sub(" ", texto)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
 # ---------------------------------------------------------------------------
 # Pontuação — réplica fiel de calcular_score_perfil() do valor_economico_scraper.py
 # (mantida inline para o script não depender do selenium.)
@@ -140,7 +173,8 @@ def palavras_ja_no_perfil(perfil):
 def _eh_conteudo(tok):
     """True se o token é uma palavra 'de conteúdo' (não filler/verbo genérico)."""
     return (len(tok) >= 4 and tok not in STOPWORDS
-            and tok not in GENERICOS and not tok.isdigit())
+            and tok not in GENERICOS and tok not in WEB_BOILERPLATE
+            and not tok.isdigit())
 
 
 def extrair_candidatos(titulo, ja_existentes, permitir_unigram=True):
@@ -240,6 +274,10 @@ def analisar(perfil, gostei, nao):
     a adicionar. Usado tanto pelo fluxo manual quanto pela sincronização.
     """
     ja = palavras_ja_no_perfil(perfil)
+
+    # Blindagem: remove URLs/ruído de página antes de pontuar e extrair termos.
+    gostei = [m for m in (limpar_manchete(x) for x in gostei) if m]
+    nao    = [m for m in (limpar_manchete(x) for x in nao)    if m]
 
     bem, novidades = [], []
     cand = Counter()
