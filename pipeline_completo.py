@@ -64,11 +64,15 @@ def load_config() -> dict:
         return {
             "elevenlabs": {
                 "api_key":  os.environ["ELEVENLABS_API_KEY"],
-                "voice_id": os.environ.get("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9"),
+                # 'or default' — se o secret não existir, o Actions injeta string
+                # vazia; o 'or' garante o fallback em vez de mandar valor vazio.
+                "voice_id": os.environ.get("ELEVENLABS_VOICE_ID") or "onwK4e9ZLuTAKqWW03F9",
                 # Turbo v2.5 consome METADE da quota por caractere vs. multilingual_v2,
                 # com qualidade pt-BR muito próxima. Pode ser sobrescrito pelo
                 # secret ELEVENLABS_MODEL (ex.: "eleven_multilingual_v2") sem editar código.
-                "model":    os.environ.get("ELEVENLABS_MODEL", "eleven_turbo_v2_5"),
+                "model":    os.environ.get("ELEVENLABS_MODEL") or "eleven_turbo_v2_5",
+                # Reforça o idioma nos modelos turbo/flash (o multilingual ignora).
+                "language_code": os.environ.get("ELEVENLABS_LANGUAGE_CODE") or "pt",
             },
             "github": {
                 "token":     os.environ.get("GH_TOKEN", ""),
@@ -283,10 +287,11 @@ def etapa_tts(txt_path: str, config: dict) -> str:
         verificar_conta,
     )
 
-    el       = config["elevenlabs"]
-    api_key  = el["api_key"]
-    voice_id = el["voice_id"]
-    model    = el["model"]
+    el        = config["elevenlabs"]
+    api_key   = el["api_key"]
+    voice_id  = el["voice_id"]
+    model     = el["model"]
+    lang_code = el.get("language_code", "pt")
 
     restante = verificar_conta(api_key)
 
@@ -310,7 +315,7 @@ def etapa_tts(txt_path: str, config: dict) -> str:
     audio_bytes = b""
     for i, chunk in enumerate(chunks, 1):
         log.info(f"  [{i}/{len(chunks)}] {len(chunk):,} chars...")
-        audio_bytes += gerar_chunk_audio(api_key, voice_id, model, chunk)
+        audio_bytes += gerar_chunk_audio(api_key, voice_id, model, chunk, lang_code)
 
     with open(mp3_path, "wb") as f:
         f.write(audio_bytes)

@@ -82,7 +82,10 @@ jobs:
       # 6. Executar o pipeline completo
       - name: 🚀 Executar pipeline
         env:
-          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_API_KEY:      ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_VOICE_ID:     ${{ secrets.ELEVENLABS_VOICE_ID }}
+          ELEVENLABS_MODEL:        ${{ secrets.ELEVENLABS_MODEL }}
+          ELEVENLABS_LANGUAGE_CODE: ${{ secrets.ELEVENLABS_LANGUAGE_CODE }}
           GH_TOKEN:           ${{ secrets.GITHUB_TOKEN }}
           GH_USUARIO:         rjabali746
           GH_REPO:            morning-call-podcast

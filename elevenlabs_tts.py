@@ -50,34 +50,60 @@ PRONUNCIA = {
     "BNDES": "B N D E S",
 }
 
+def _valor_com_moeda(inteiro, moeda):
+    """'1' → '1 real'/'1 dólar'; caso geral → 'N reais'/'N dólares'."""
+    if inteiro == "1":
+        return "1 real" if moeda == "reais" else "1 dólar"
+    return f"{inteiro} {moeda}"
+
 def _moeda_para_fala(m):
-    """Converte 'R$ 5,15' → '5,15 reais' e 'US$ 300 milhões' → '300 milhões de dólares'."""
+    """Converte moeda para fala natural em pt-BR, tratando centavos:
+      'R$ 5,15'        → '5 reais e 15 centavos'
+      'R$ 1.234,00'    → '1234 reais'
+      'US$ 300 milhões'→ '300 milhões de dólares'
+      'R$ 5,15 bilhões'→ '5,15 bilhões de reais'  (a vírgula vira 'vírgula' depois)
+    """
     valor = m.group(1)
     mag   = (m.group(2) or "").strip()
-    moeda = "reais" if m.group(0).lstrip().startswith("R$") else "dólares"
-    if mag:
+    is_real    = m.group(0).lstrip().startswith("R$")
+    moeda      = "reais" if is_real else "dólares"
+    cent_moeda = "centavos" if is_real else "centavos de dólar"
+    if mag:                                   # 5,15 bilhões de reais
         return f"{valor} {mag} de {moeda}"
-    return f"{valor} {moeda}"
+    valor = valor.replace(".", "")            # remove separador de milhar
+    if "," in valor:                          # tem centavos
+        inteiro, dec = valor.split(",", 1)
+        inteiro = inteiro or "0"
+        dec = (dec + "00")[:2]
+        if dec == "00":
+            return _valor_com_moeda(inteiro, moeda)
+        return f"{_valor_com_moeda(inteiro, moeda)} e {dec} {cent_moeda}"
+    return _valor_com_moeda(valor, moeda)
 
 def _normalizar_para_fala(texto):
     """
-    Normaliza números e símbolos para leitura natural pelo TTS.
-    Ex.: 'R$ 5,15' → '5,15 reais'; '12%' → '12 por cento'; '05h03' → '05 horas e 03'.
-    Reduz erros de pronúncia sem gastar quota extra (o texto normalizado
-    tende a ter tamanho parecido com o original).
+    Normaliza números e símbolos para leitura natural pelo TTS em pt-BR.
+    Ex.: 'R$ 5,15' → '5 reais e 15 centavos'; '13,25%' → '13 vírgula 25 por cento';
+         '05h03' → '05 horas e 03'.
+    Reduz erros de pronúncia sem gastar quota extra.
     """
-    # Moeda R$ / US$ — antes das % para não conflitar.
-    # Magnitudes maiores primeiro (bilhão antes de mil); o espaço + magnitude
-    # ficam dentro do grupo opcional, para não engolir o espaço quando não há magnitude.
+    # 1. Separador de milhar (ponto): 1.234.567 → 1234567  (evita 'um ponto...')
+    texto = re.sub(r"\d{1,3}(?:\.\d{3})+",
+                   lambda m: m.group(0).replace(".", ""), texto)
+    # 2. Moeda R$ / US$ — antes das % para não conflitar.
+    #    Magnitudes maiores primeiro; espaço + magnitude ficam no grupo opcional.
     texto = re.sub(
         r"(?:R\$|US\$)\s*([\d.,]+)(?:\s+(bilh(?:ão|ões)|milh(?:ão|ões)|trilh(?:ão|ões)|mil))?",
         _moeda_para_fala, texto)
-    # Porcentagem
+    # 3. Porcentagem
     texto = re.sub(r"(\d+(?:,\d+)?)\s*%", r"\1 por cento", texto)
-    # Horários: 12h44 → '12 horas e 44'; 12h → '12 horas'
+    # 4. Horários: 12h44 → '12 horas e 44'; 12h → '12 horas'
     texto = re.sub(r"\b(\d{1,2})h(\d{2})\b", r"\1 horas e \2", texto)
     texto = re.sub(r"\b(\d{1,2})h\b", r"\1 horas", texto)
-    # Dicionário de siglas (palavra inteira, sensível a maiúsculas)
+    # 5. Vírgula decimal restante → ' vírgula ' falado (13,25 → 13 vírgula 25).
+    #    Só entre dígitos, para não afetar listas ('A, B') nem datas.
+    texto = re.sub(r"(\d),(\d)", r"\1 vírgula \2", texto)
+    # 6. Dicionário de siglas (palavra inteira, sensível a maiúsculas)
     for sigla, expan in PRONUNCIA.items():
         if expan != sigla:
             texto = re.sub(rf"\b{re.escape(sigla)}\b", expan, texto)
@@ -145,15 +171,38 @@ def listar_vozes(api_key):
     )
     resp.raise_for_status()
     vozes = resp.json().get("voices", [])
-    print(f"\n🎙️  {len(vozes)} vozes disponíveis:\n")
-    for v in vozes:
+
+    def _eh_portugues(v):
+        blob = " ".join(str(x) for x in v.get("labels", {}).values()).lower()
+        blob += " " + v.get("name", "").lower()
+        return ("portug" in blob or "brazil" in blob or "brasil" in blob
+                or blob.strip().endswith(" pt") or " pt " in blob)
+
+    # Vozes em português primeiro, para achar o sotaque certo na hora.
+    pt = [v for v in vozes if _eh_portugues(v)]
+    outras = [v for v in vozes if not _eh_portugues(v)]
+
+    def _linha(v, marca=""):
         labels = v.get("labels", {})
         lang   = labels.get("language", "")
         acc    = labels.get("accent", "")
         gen    = labels.get("gender", "")
-        print(f"  ID: {v['voice_id']}")
-        print(f"  Nome: {v['name']} | {lang} {acc} {gen}")
+        print(f"  {marca}ID: {v['voice_id']}")
+        print(f"  {marca}Nome: {v['name']} | {lang} {acc} {gen}")
         print()
+
+    print(f"\n🎙️  {len(vozes)} vozes disponíveis:\n")
+    if pt:
+        print("🇧🇷 ─ PORTUGUÊS / BRASIL (use uma destas para o sotaque certo) ─")
+        for v in pt:
+            _linha(v, marca="⭐ ")
+    else:
+        print("⚠️  Nenhuma voz em português na conta. Adicione uma pelo Voice Library:")
+        print("    https://elevenlabs.io/app/voice-library  → filtre 'Portuguese (Brazil)'")
+        print("    → clique 'Add to my voices' → rode este comando de novo.\n")
+    print("── Demais vozes ──")
+    for v in outras:
+        _linha(v)
     return vozes
 
 def verificar_conta(api_key):
@@ -176,7 +225,7 @@ def verificar_conta(api_key):
         print(f"  ⚠️  Não foi possível verificar saldo: {e}")
     return None
 
-def gerar_chunk_audio(api_key, voice_id, model, texto):
+def gerar_chunk_audio(api_key, voice_id, model, texto, language_code=None):
     """Gera áudio para um chunk de texto via ElevenLabs API."""
     url  = f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}"
     body = {
@@ -189,6 +238,10 @@ def gerar_chunk_audio(api_key, voice_id, model, texto):
             "use_speaker_boost": True
         }
     }
+    # language_code força o idioma — suportado só pelos modelos turbo/flash v2.5.
+    # (O multilingual_v2 ignora/rejeita o parâmetro, então só enviamos quando cabe.)
+    if language_code and ("turbo" in model or "flash" in model):
+        body["language_code"] = language_code
     headers = {
         "xi-api-key":   api_key,
         "Content-Type": "application/json",
@@ -218,6 +271,7 @@ def gerar_audio(txt_file=None):
     api_key   = el_config.get("api_key", "")
     voice_id  = el_config.get("voice_id", "onwK4e9ZLuTAKqWW03F9")
     model     = el_config.get("model", "eleven_multilingual_v2")
+    lang_code = el_config.get("language_code", "pt")
 
     if not api_key:
         print("❌ API key do ElevenLabs não encontrada no config.json")
@@ -257,7 +311,7 @@ def gerar_audio(txt_file=None):
         print(f"  [{i}/{len(chunks)}] {len(chunk):,} chars... ", end="", flush=True)
         t0 = datetime.now()
         try:
-            audio_bytes += gerar_chunk_audio(api_key, voice_id, model, chunk)
+            audio_bytes += gerar_chunk_audio(api_key, voice_id, model, chunk, lang_code)
             secs = (datetime.now() - t0).seconds
             print(f"✅ ({secs}s)")
         except Exception as e:
