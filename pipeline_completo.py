@@ -65,7 +65,10 @@ def load_config() -> dict:
             "elevenlabs": {
                 "api_key":  os.environ["ELEVENLABS_API_KEY"],
                 "voice_id": os.environ.get("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9"),
-                "model":    "eleven_multilingual_v2",
+                # Turbo v2.5 consome METADE da quota por caractere vs. multilingual_v2,
+                # com qualidade pt-BR muito próxima. Pode ser sobrescrito pelo
+                # secret ELEVENLABS_MODEL (ex.: "eleven_multilingual_v2") sem editar código.
+                "model":    os.environ.get("ELEVENLABS_MODEL", "eleven_turbo_v2_5"),
             },
             "github": {
                 "token":     os.environ.get("GH_TOKEN", ""),

@@ -37,12 +37,21 @@ CONFIG_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config
 COOKIE_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "valor_cookies.json")
 PERFIL_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perfil_interesses.json")
 
-# ── Parâmetros de tempo do podcast ────────────────────────────────────────────
+# ── Parâmetros de tempo e tamanho do podcast ──────────────────────────────────
 WPM_PODCAST      = 140   # palavras por minuto narradas em português (ElevenLabs)
-MAX_MIN_PODCAST  = 10    # duração máxima do episódio em minutos
+MAX_MIN_PODCAST  = 6     # duração máxima do episódio em minutos (Morning Call enxuto)
 MAX_CHARS_RESUMO = 1500  # caracteres máx por resumo de notícia (~250 palavras)
-# Palavras fixas de intro + outro (estimativa)
-_PALAVRAS_INTRO_OUTRO = 70
+
+# Teto RÍGIDO de caracteres enviados ao TTS por episódio. É o controle direto de
+# quota do ElevenLabs (cada caractere consome créditos). O episódio para de
+# incluir notícias assim que este limite — ou o de tempo — seria ultrapassado.
+# ~4500 chars ≈ 5–6 min de áudio. Ajuste este número para gastar mais/menos quota.
+MAX_CHARS_EPISODIO = 4500
+
+# Estimativas fixas usadas no cálculo dos tetos
+_PALAVRAS_INTRO_OUTRO   = 70    # palavras de intro + outro
+_CHARS_INTRO_OUTRO      = 380   # caracteres de intro + outro
+_CHARS_OVERHEAD_NOTICIA = 45    # "Notícia N. <título>." + quebras de linha
 
 # Páginas de seção do Valor (scraping direto, sem RSS)
 VALOR_SECOES = [
@@ -514,7 +523,8 @@ def buscar_noticias(session):
 # SELEÇÃO POR TEMPO
 # ============================================================================
 
-def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST, min_score=6):
+def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST,
+                         min_score=6, max_chars=MAX_CHARS_EPISODIO):
     """
     Seleciona notícias enriquecidas em ordem de score até o limite de tempo.
 
@@ -532,8 +542,10 @@ def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST, min
     """
     max_palavras = max_min * wpm
     palavras_usadas = _PALAVRAS_INTRO_OUTRO
+    chars_usados    = _CHARS_INTRO_OUTRO
     selecionadas = []
     ignoradas_score = 0
+    parou_por_chars = False
 
     for n in noticias:
         score = n.get("score_relevancia", 0)
@@ -548,21 +560,33 @@ def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST, min
         titulo   = n.get("titulo", "")
 
         palavras_noticia = len(titulo.split()) + 5 + len(resumo.split())
+        chars_noticia    = len(titulo) + len(resumo) + _CHARS_OVERHEAD_NOTICIA
 
-        if palavras_usadas + palavras_noticia > max_palavras:
-            break  # próxima notícia ultrapassaria o limite de tempo
+        # Para se a próxima notícia estourar o teto de TEMPO ou de CARACTERES.
+        # O teto de caracteres é o controle direto de quota do ElevenLabs.
+        estoura_tempo = palavras_usadas + palavras_noticia > max_palavras
+        estoura_chars = chars_usados + chars_noticia > max_chars
+        if estoura_tempo or estoura_chars:
+            if selecionadas:           # garante ao menos 1 notícia no episódio
+                parou_por_chars = estoura_chars and not estoura_tempo
+                break
 
         palavras_usadas += palavras_noticia
+        chars_usados    += chars_noticia
         selecionadas.append(n)
 
     tempo_min = palavras_usadas / wpm
     tempo_seg = int((tempo_min % 1) * 60)
     tempo_str = f"{int(tempo_min)}min{tempo_seg:02d}s"
 
-    print(f"\n  ⏱️  Seleção por tempo: {len(selecionadas)} notícias selecionadas"
-          f"  (min_score={min_score}, max={max_min}min)")
+    print(f"\n  ⏱️  Seleção: {len(selecionadas)} notícias selecionadas"
+          f"  (min_score={min_score}, tetos: {max_min}min / {max_chars} chars)")
     print(f"       Duração estimada: ~{tempo_str}"
           f"  ({palavras_usadas} palavras @ {wpm} wpm)")
+    print(f"       Quota estimada: ~{chars_usados} chars"
+          f"  (teto {max_chars} — controle de créditos ElevenLabs)")
+    if parou_por_chars:
+        print(f"       ⚑ Episódio limitado pelo teto de caracteres (quota), não pelo tempo")
     if ignoradas_score:
         print(f"       {ignoradas_score} artigo(s) ignorados por score < {min_score}")
     for i, n in enumerate(selecionadas, 1):

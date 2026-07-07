@@ -40,6 +40,49 @@ def get_texto_mais_recente():
         sys.exit(1)
     return max(arquivos, key=os.path.getmtime)
 
+# Dicionário de pronúncia para jargão financeiro que o TTS costuma soletrar
+# ou pronunciar mal. Só inclua siglas cuja expansão seja inequívoca — as que
+# o modelo já lê bem (PIB, IPCA, Selic, CEO) ficam de fora de propósito.
+PRONUNCIA = {
+    "EUA": "Estados Unidos",
+    "BC":  "Banco Central",
+    "CVM": "Comissão de Valores Mobiliários",
+    "BNDES": "B N D E S",
+}
+
+def _moeda_para_fala(m):
+    """Converte 'R$ 5,15' → '5,15 reais' e 'US$ 300 milhões' → '300 milhões de dólares'."""
+    valor = m.group(1)
+    mag   = (m.group(2) or "").strip()
+    moeda = "reais" if m.group(0).lstrip().startswith("R$") else "dólares"
+    if mag:
+        return f"{valor} {mag} de {moeda}"
+    return f"{valor} {moeda}"
+
+def _normalizar_para_fala(texto):
+    """
+    Normaliza números e símbolos para leitura natural pelo TTS.
+    Ex.: 'R$ 5,15' → '5,15 reais'; '12%' → '12 por cento'; '05h03' → '05 horas e 03'.
+    Reduz erros de pronúncia sem gastar quota extra (o texto normalizado
+    tende a ter tamanho parecido com o original).
+    """
+    # Moeda R$ / US$ — antes das % para não conflitar.
+    # Magnitudes maiores primeiro (bilhão antes de mil); o espaço + magnitude
+    # ficam dentro do grupo opcional, para não engolir o espaço quando não há magnitude.
+    texto = re.sub(
+        r"(?:R\$|US\$)\s*([\d.,]+)(?:\s+(bilh(?:ão|ões)|milh(?:ão|ões)|trilh(?:ão|ões)|mil))?",
+        _moeda_para_fala, texto)
+    # Porcentagem
+    texto = re.sub(r"(\d+(?:,\d+)?)\s*%", r"\1 por cento", texto)
+    # Horários: 12h44 → '12 horas e 44'; 12h → '12 horas'
+    texto = re.sub(r"\b(\d{1,2})h(\d{2})\b", r"\1 horas e \2", texto)
+    texto = re.sub(r"\b(\d{1,2})h\b", r"\1 horas", texto)
+    # Dicionário de siglas (palavra inteira, sensível a maiúsculas)
+    for sigla, expan in PRONUNCIA.items():
+        if expan != sigla:
+            texto = re.sub(rf"\b{re.escape(sigla)}\b", expan, texto)
+    return texto
+
 def limpar_texto_para_audio(texto):
     """Remove elementos visuais que ficam estranhos no áudio."""
     texto = re.sub(r"={3,}", "", texto)
@@ -48,6 +91,8 @@ def limpar_texto_para_audio(texto):
     texto = re.sub(r"\*+", "", texto)
     texto = re.sub(r"#{1,6}\s*", "", texto)
     texto = re.sub(r"\n{3,}", "\n\n", texto)
+    # Normaliza números/símbolos/siglas para leitura natural (Optimização 4)
+    texto = _normalizar_para_fala(texto)
     return texto.strip()
 
 def dividir_em_chunks(texto, tamanho=CHUNK_SIZE):
