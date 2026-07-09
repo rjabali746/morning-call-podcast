@@ -617,6 +617,12 @@ def get_selenium_driver(cookies_list):
     if not SELENIUM_OK:
         return None
 
+    # Em ambiente CI (GitHub Actions) o Chrome headless frequentemente trava
+    # na inicialização. O fallback via requests funciona bem — pulamos o Selenium.
+    if os.environ.get("GITHUB_ACTIONS"):
+        print("  ℹ️  Ambiente CI detectado — usando requests diretamente (sem Selenium)")
+        return None
+
     print("  🔧 Iniciando Chrome (Selenium) para ler artigos completos...")
     opts = Options()
     opts.add_argument("--headless=new")          # invisível, roda em background

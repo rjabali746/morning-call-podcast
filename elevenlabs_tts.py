@@ -225,6 +225,58 @@ def verificar_conta(api_key):
         print(f"  ⚠️  Não foi possível verificar saldo: {e}")
     return None
 
+
+def verificar_ou_descobrir_voice_id(api_key, voice_id_configurado):
+    """
+    Verifica se o voice_id configurado existe na conta.
+    Se não existir (404), descobre automaticamente a primeira voz disponível.
+    Retorna o voice_id válido ou lança exceção se a conta não tiver nenhuma voz.
+    """
+    # 1. Testar o voice_id configurado
+    try:
+        resp = requests.get(
+            f"{ELEVENLABS_BASE}/voices/{voice_id_configurado}",
+            headers={"xi-api-key": api_key},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            nome = resp.json().get("name", voice_id_configurado)
+            print(f"  🎙️  Voz confirmada: {nome} ({voice_id_configurado})")
+            return voice_id_configurado
+        print(f"  ⚠️  Voice ID '{voice_id_configurado}' inválido (HTTP {resp.status_code}) — buscando voz disponível...")
+    except Exception as e:
+        print(f"  ⚠️  Erro ao verificar voice_id: {e} — buscando voz disponível...")
+
+    # 2. Auto-descoberta: listar vozes da conta
+    try:
+        resp = requests.get(
+            f"{ELEVENLABS_BASE}/voices",
+            headers={"xi-api-key": api_key},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            vozes = resp.json().get("voices", [])
+            if vozes:
+                # Preferir vozes com "brazil" ou "portuguese" nos labels
+                def _score_pt(v):
+                    blob = " ".join(str(x) for x in v.get("labels", {}).values()).lower()
+                    blob += " " + v.get("name", "").lower()
+                    return ("portug" in blob or "brazil" in blob or "brasil" in blob)
+
+                pt_vozes = [v for v in vozes if _score_pt(v)]
+                voz_escolhida = pt_vozes[0] if pt_vozes else vozes[0]
+                vid = voz_escolhida["voice_id"]
+                nome = voz_escolhida.get("name", vid)
+                print(f"  ✅ Voz encontrada automaticamente: {nome} ({vid})")
+                return vid
+    except Exception as e:
+        print(f"  ⚠️  Erro ao listar vozes: {e}")
+
+    raise RuntimeError(
+        f"Voice ID '{voice_id_configurado}' inválido e nenhuma voz disponível na conta ElevenLabs. "
+        "Verifique o secret ELEVENLABS_VOICE_ID no GitHub e as vozes em https://elevenlabs.io/app/voice-lab"
+    )
+
 def gerar_chunk_audio(api_key, voice_id, model, texto, language_code=None):
     """Gera áudio para um chunk de texto via ElevenLabs API."""
     url  = f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}"

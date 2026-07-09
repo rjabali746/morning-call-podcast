@@ -285,15 +285,18 @@ def etapa_tts(txt_path: str, config: dict) -> str:
         dividir_em_chunks,
         gerar_chunk_audio,
         verificar_conta,
+        verificar_ou_descobrir_voice_id,
     )
 
     el        = config["elevenlabs"]
     api_key   = el["api_key"]
-    voice_id  = el["voice_id"]
     model     = el["model"]
     lang_code = el.get("language_code", "pt")
 
     restante = verificar_conta(api_key)
+
+    # Valida voice_id configurado — auto-descobre se for inválido (404)
+    voice_id = verificar_ou_descobrir_voice_id(api_key, el["voice_id"])
 
     with open(txt_path, encoding="utf-8") as f:
         texto_bruto = f.read()
