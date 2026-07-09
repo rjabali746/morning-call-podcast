@@ -44,7 +44,8 @@ INBOX_FILE  = os.path.join(BASE, "manchetes_favoritas.txt")
 LOG_FILE    = os.path.join(BASE, "manchetes_processadas.log")
 
 TEMA_NOVOS   = "novos_interesses_a_revisar"
-PESO_NOVOS   = 4
+PESO_NOVOS   = 2   # Baixo propositalmente: termos ainda não revisados pelo Roberto.
+                   # Só contribuem como sinal fraco até serem promovidos a temas definitivos.
 PEN_DESCARTE = "descartadas_pelo_usuario"
 PESO_DESCARTE = -4
 
@@ -53,7 +54,11 @@ PESO_DESCARTE = -4
 LIMIAR_NOVIDADE = 7
 
 # Nº máximo de termos novos incorporados por execução (evita poluir o perfil).
-MAX_TERMOS_POR_RUN = 15
+MAX_TERMOS_POR_RUN = 8   # Reduzido: preferimos poucos termos específicos a muitos genéricos.
+
+# Máximo de termos acumulados no tema de revisão antes de parar de adicionar.
+# Força o Roberto a revisar periodicamente e promover termos a temas definitivos.
+MAX_TERMOS_ACUMULADOS = 30
 
 # Stopwords pt-BR + ruído comum de manchete financeira.
 STOPWORDS = {
@@ -396,9 +401,15 @@ def aplicar(perfil, gostei, plano):
             "Termos aprendidos das manchetes favoritas — revisar e promover a temas definitivos.",
             PESO_NOVOS)
         existentes = {p.lower() for p in tema["palavras"]}
-        for t in plano["termos_novos"]:
-            if t not in existentes:
-                tema["palavras"].append(t)
+        # Só adiciona se ainda não atingiu o limite de acumulação
+        if len(existentes) >= MAX_TERMOS_ACUMULADOS:
+            print(f"  ⚠️  '{TEMA_NOVOS}' já tem {len(existentes)} termos (máx {MAX_TERMOS_ACUMULADOS}).")
+            print(f"       Revise o perfil_interesses.json e promova termos úteis a temas definitivos.")
+        else:
+            for t in plano["termos_novos"]:
+                if t not in existentes and len(existentes) < MAX_TERMOS_ACUMULADOS:
+                    tema["palavras"].append(t)
+                    existentes.add(t)
 
     if plano["termos_descarte"]:
         pen = garantir_penalizacao(

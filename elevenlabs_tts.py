@@ -221,6 +221,10 @@ def verificar_conta(api_key):
             plano    = data.get("tier", "unknown")
             print(f"  📊 Plano: {plano} | Usado: {usado:,} | Restante: {restante:,} chars")
             return restante
+        elif resp.status_code == 401:
+            print(f"  ❌ ELEVENLABS_API_KEY inválida (HTTP 401). Verifique o secret no GitHub.")
+        else:
+            print(f"  ⚠️  /user/subscription retornou HTTP {resp.status_code}")
     except Exception as e:
         print(f"  ⚠️  Não foi possível verificar saldo: {e}")
     return None
@@ -269,12 +273,39 @@ def verificar_ou_descobrir_voice_id(api_key, voice_id_configurado):
                 nome = voz_escolhida.get("name", vid)
                 print(f"  ✅ Voz encontrada automaticamente: {nome} ({vid})")
                 return vid
+            print(f"  ⚠️  /voices retornou lista vazia (HTTP 200). Tentando vozes pré-construídas...")
+        else:
+            print(f"  ⚠️  /voices retornou HTTP {resp.status_code}. Tentando vozes pré-construídas...")
     except Exception as e:
-        print(f"  ⚠️  Erro ao listar vozes: {e}")
+        print(f"  ⚠️  Erro ao listar vozes: {e}. Tentando vozes pré-construídas...")
+
+    # 3. Último recurso: testar IDs de vozes pré-construídas estáveis do ElevenLabs.
+    # Estas vozes existem em todas as contas (inclusive plano gratuito).
+    VOZES_PREBUILTAS = [
+        ("Daniel",  "onwK4e9ZLuTAKqWW03F9"),   # Daniel — masculina, jornalística
+        ("Rachel",  "21m00Tcm4TlvDq8ikWAM"),   # Rachel — feminina, clara
+        ("Adam",    "pNInz6obpgDQGcFmaJgB"),   # Adam — masculina, neutra
+        ("Antoni",  "ErXwobaYiN019PkySvjV"),   # Antoni — masculina, expressiva
+        ("Josh",    "TxGEqnHWrfWFTfGW9XjX"),   # Josh — masculina, jovem
+    ]
+    for nome, vid in VOZES_PREBUILTAS:
+        try:
+            r = requests.get(
+                f"{ELEVENLABS_BASE}/voices/{vid}",
+                headers={"xi-api-key": api_key},
+                timeout=8
+            )
+            if r.status_code == 200:
+                print(f"  ✅ Voz pré-construída disponível: {nome} ({vid})")
+                return vid
+        except Exception:
+            pass
 
     raise RuntimeError(
-        f"Voice ID '{voice_id_configurado}' inválido e nenhuma voz disponível na conta ElevenLabs. "
-        "Verifique o secret ELEVENLABS_VOICE_ID no GitHub e as vozes em https://elevenlabs.io/app/voice-lab"
+        f"Voice ID '{voice_id_configurado}' inválido e nenhuma voz acessível. "
+        "Verifique: (1) API key correta no secret ELEVENLABS_API_KEY; "
+        "(2) Conta ativa em https://elevenlabs.io; "
+        "(3) Vozes em https://elevenlabs.io/app/voice-lab"
     )
 
 def gerar_chunk_audio(api_key, voice_id, model, texto, language_code=None):
