@@ -40,14 +40,44 @@ def get_texto_mais_recente():
         sys.exit(1)
     return max(arquivos, key=os.path.getmtime)
 
-# Dicionário de pronúncia para jargão financeiro que o TTS costuma soletrar
-# ou pronunciar mal. Só inclua siglas cuja expansão seja inequívoca — as que
-# o modelo já lê bem (PIB, IPCA, Selic, CEO) ficam de fora de propósito.
+# Meses em português para conversão de datas numéricas
+_MESES_PT = {
+    "01": "janeiro", "02": "fevereiro", "03": "março",   "04": "abril",
+    "05": "maio",    "06": "junho",     "07": "julho",   "08": "agosto",
+    "09": "setembro","10": "outubro",   "11": "novembro","12": "dezembro",
+}
+
+# Expansão das abreviações de magnitude financeira (bi/mi/tri são comuns no
+# Valor Econômico e causavam "travamento" porque o TTS não as reconhecia
+# no contexto de "R$ 1,2 bi").
+_MAG_EXPAND = {
+    "bi":      "bilhões",  "mi":      "milhões",  "tri":     "trilhões",
+    "bilhão":  "bilhão",   "bilhões": "bilhões",
+    "milhão":  "milhão",   "milhões": "milhões",
+    "trilhão": "trilhão",  "trilhões":"trilhões",
+    "mil":     "mil",
+}
+
+# Dicionário de pronúncia: siglas que o TTS costuma soletrar ou ler errado.
+# Só inclua siglas cuja expansão seja inequívoca — as que o modelo já lê bem
+# (PIB, IPCA, Selic, CEO, Fed) ficam de fora de propósito.
 PRONUNCIA = {
-    "EUA": "Estados Unidos",
-    "BC":  "Banco Central",
-    "CVM": "Comissão de Valores Mobiliários",
+    "EUA":   "Estados Unidos",
+    "BC":    "Banco Central",
+    "CVM":   "Comissão de Valores Mobiliários",
     "BNDES": "B N D E S",
+    "FGTS":  "F G T S",
+    "INSS":  "I N S S",
+    "TCU":   "T C U",
+    "LCI":   "L C I",
+    "LCA":   "L C A",
+    "CDB":   "C D B",
+    "FII":   "F I I",
+    "ETF":   "E T F",
+    "IPO":   "I P O",
+    "M&A":   "fusões e aquisições",
+    "p.p.":  "pontos percentuais",
+    "bps":   "pontos-base",
 }
 
 def _valor_com_moeda(inteiro, moeda):
@@ -57,19 +87,23 @@ def _valor_com_moeda(inteiro, moeda):
     return f"{inteiro} {moeda}"
 
 def _moeda_para_fala(m):
-    """Converte moeda para fala natural em pt-BR, tratando centavos:
+    """Converte moeda para fala natural em pt-BR, tratando centavos e
+    abreviações de magnitude (bi, mi, tri):
+      'R$ 1,2 bi'      → '1,2 bilhões de reais'   (a vírgula vira 'vírgula' depois)
       'R$ 5,15'        → '5 reais e 15 centavos'
       'R$ 1.234,00'    → '1234 reais'
       'US$ 300 milhões'→ '300 milhões de dólares'
-      'R$ 5,15 bilhões'→ '5,15 bilhões de reais'  (a vírgula vira 'vírgula' depois)
     """
-    valor = m.group(1)
-    mag   = (m.group(2) or "").strip()
+    valor      = m.group(1)
+    mag_raw    = (m.group(2) or "").strip().lower()
     is_real    = m.group(0).lstrip().startswith("R$")
     moeda      = "reais" if is_real else "dólares"
     cent_moeda = "centavos" if is_real else "centavos de dólar"
-    if mag:                                   # 5,15 bilhões de reais
+
+    if mag_raw:
+        mag = _MAG_EXPAND.get(mag_raw, mag_raw)
         return f"{valor} {mag} de {moeda}"
+
     valor = valor.replace(".", "")            # remove separador de milhar
     if "," in valor:                          # tem centavos
         inteiro, dec = valor.split(",", 1)
@@ -80,33 +114,65 @@ def _moeda_para_fala(m):
         return f"{_valor_com_moeda(inteiro, moeda)} e {dec} {cent_moeda}"
     return _valor_com_moeda(valor, moeda)
 
+# Padrão de magnitude para uso nas regex
+_MAG_PAT = r"bilh(?:ão|ões)|milh(?:ão|ões)|trilh(?:ão|ões)|tri|bi|mi|mil"
+
 def _normalizar_para_fala(texto):
     """
     Normaliza números e símbolos para leitura natural pelo TTS em pt-BR.
-    Ex.: 'R$ 5,15' → '5 reais e 15 centavos'; '13,25%' → '13 vírgula 25 por cento';
-         '05h03' → '05 horas e 03'.
-    Reduz erros de pronúncia sem gastar quota extra.
+    Elimina os principais padrões que causam "travamentos" na narração:
+    abreviações financeiras (bi/mi/tri), datas numéricas, percentuais com
+    sinal, horários com dois-pontos e ordinais.
     """
-    # 1. Separador de milhar (ponto): 1.234.567 → 1234567  (evita 'um ponto...')
+    # 1. Datas numéricas: 18/07/2026 → '18 de julho de 2026'; 18/07 → '18 de julho'
+    def _data(m):
+        dia = str(int(m.group(1)))
+        mes = _MESES_PT.get(m.group(2), m.group(2))
+        ano = m.group(3)
+        return f"{dia} de {mes}" + (f" de {ano}" if ano else "")
+    texto = re.sub(r"\b(\d{1,2})/(\d{2})(?:/(\d{4}))?\b", _data, texto)
+
+    # 2. Separador de milhar (ponto): 1.234.567 → 1234567
     texto = re.sub(r"\d{1,3}(?:\.\d{3})+",
                    lambda m: m.group(0).replace(".", ""), texto)
-    # 2. Moeda R$ / US$ — antes das % para não conflitar.
-    #    Magnitudes maiores primeiro; espaço + magnitude ficam no grupo opcional.
+
+    # 3. Moeda R$ / US$ — inclui abreviações bi/mi/tri além das formas plenas
     texto = re.sub(
-        r"(?:R\$|US\$)\s*([\d.,]+)(?:\s+(bilh(?:ão|ões)|milh(?:ão|ões)|trilh(?:ão|ões)|mil))?",
+        rf"(?:R\$|US\$)\s*([\d.,]+)(?:\s+({_MAG_PAT})\b)?",
         _moeda_para_fala, texto)
-    # 3. Porcentagem
-    texto = re.sub(r"(\d+(?:,\d+)?)\s*%", r"\1 por cento", texto)
-    # 4. Horários: 12h44 → '12 horas e 44'; 12h → '12 horas'
+
+    # 4. Magnitudes sem símbolo de moeda: '4,5 bi lucro' → '4,5 bilhões lucro'
+    def _num_mag(m):
+        mag = _MAG_EXPAND.get(m.group(2).lower(), m.group(2))
+        return f"{m.group(1)} {mag}"
+    texto = re.sub(rf"(\d+(?:[.,]\d+)?)\s+(bi|mi|tri)\b", _num_mag, texto)
+
+    # 5. Porcentagem (aceita sinal + ou -)
+    texto = re.sub(r"([+-]?\d+(?:,\d+)?)\s*%", r"\1 por cento", texto)
+
+    # 6. Horários: 12h44 → '12 horas e 44'; 14:30 → '14 horas e 30'
     texto = re.sub(r"\b(\d{1,2})h(\d{2})\b", r"\1 horas e \2", texto)
-    texto = re.sub(r"\b(\d{1,2})h\b", r"\1 horas", texto)
-    # 5. Vírgula decimal restante → ' vírgula ' falado (13,25 → 13 vírgula 25).
-    #    Só entre dígitos, para não afetar listas ('A, B') nem datas.
+    texto = re.sub(r"\b(\d{1,2})h\b",         r"\1 horas",      texto)
+    texto = re.sub(r"\b(\d{1,2}):(\d{2})\b",  r"\1 horas e \2", texto)
+
+    # 7. Ordinais: 1º → primeiro, 2ª → segunda (até 10º/10ª)
+    _ORD_M = ["","primeiro","segundo","terceiro","quarto","quinto",
+               "sexto","sétimo","oitavo","nono","décimo"]
+    _ORD_F = ["","primeira","segunda","terceira","quarta","quinta",
+               "sexta","sétima","oitava","nona","décima"]
+    def _ordinal(m):
+        n = int(m.group(1))
+        lst = _ORD_F if m.group(2) == "ª" else _ORD_M
+        return lst[n] if 1 <= n < len(lst) else m.group(0)
+    texto = re.sub(r"\b(\d+)([ºª])\b", _ordinal, texto)
+
+    # 8. Vírgula decimal restante → ' vírgula ' (só entre dígitos)
     texto = re.sub(r"(\d),(\d)", r"\1 vírgula \2", texto)
-    # 6. Dicionário de siglas (palavra inteira, sensível a maiúsculas)
+
+    # 9. Dicionário de siglas e expressões (palavra inteira)
     for sigla, expan in PRONUNCIA.items():
-        if expan != sigla:
-            texto = re.sub(rf"\b{re.escape(sigla)}\b", expan, texto)
+        texto = re.sub(rf"(?<!\w){re.escape(sigla)}(?!\w)", expan, texto)
+
     return texto
 
 def limpar_texto_para_audio(texto):
