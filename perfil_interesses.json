@@ -1,8 +1,8 @@
 {
   "_meta": {
     "versao": 2,
-    "ultima_atualizacao": "2026-07-20",
-    "total_exemplos_analisados": 21,
+    "ultima_atualizacao": "2026-07-24",
+    "total_exemplos_analisados": 22,
     "contexto_profissional": "Empresa com forte atuação em crédito pessoa física e adquirência",
     "descricao": "Perfil de interesses do Roberto Jabali. Temas de peso 7 = core do negócio (crédito PF, adquirência, PME). Peso 5 = alto interesse pessoal/estratégico. Peso 4 = relevante mas secundário. Pesos menores = contexto de mercado.",
     "escala_de_pesos": {
@@ -675,6 +675,7 @@
     "https://valor.globo.com/financas/noticia/2026/07/08/secretario-do-tesouro-diz-que-ainda-nao-e-um-jogo-perdido-no-paf-e-que-e-preciso-acompanhar-desdobramentos-do-mercado.ghtml",
     "https://valor.globo.com/financas/noticia/2026/07/11/brb-completa-1-ano-sem-divulgar-resultado-e-se-aproxima-de-prazo-limite-para-resolver-crise-ps-master.ghtml",
     "https://valor.globo.com/financas/noticia/2026/07/17/brb-encerra-negociacao-com-a-quadra-para-vender-ativos-do-master.ghtml",
-    "https://valor.globo.com/financas/intraday/post/2026/07/fazenda-vai-a-faria-lima-para-tentar-conter-preocupacoes-com-a-divida-publica.ghtml"
+    "https://valor.globo.com/financas/intraday/post/2026/07/fazenda-vai-a-faria-lima-para-tentar-conter-preocupacoes-com-a-divida-publica.ghtml",
+    "https://valor.globo.com/financas/noticia/2026/07/23/fintech-revolut-avaliada-em-us-115-bilhes-quase-65-pontos-percentuais-acima-do-nubank.ghtml"
   ]
 }
