@@ -90,8 +90,15 @@ jobs:
       - name: 🚀 Executar pipeline
         env:
           ELEVENLABS_API_KEY:      ${{ secrets.ELEVENLABS_API_KEY }}
-          # Opcional — sem ela a classificação por IA é simplesmente pulada
+          # Classificação por IA — opcional. Configure UMA destas; sem
+          # nenhuma, a etapa é pulada e o episódio sai igual.
+          # Grátis e sem cartão: Groq, Gemini, OpenRouter.
+          GROQ_API_KEY:            ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY:          ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY:      ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY:       ${{ secrets.ANTHROPIC_API_KEY }}
+          IA_PROVEDOR:             ${{ secrets.IA_PROVEDOR }}
+          IA_MODELO:               ${{ secrets.IA_MODELO }}
           ELEVENLABS_VOICE_ID:     ${{ secrets.ELEVENLABS_VOICE_ID }}
           ELEVENLABS_MODEL:        ${{ secrets.ELEVENLABS_MODEL }}
           ELEVENLABS_LANGUAGE_CODE: ${{ secrets.ELEVENLABS_LANGUAGE_CODE }}

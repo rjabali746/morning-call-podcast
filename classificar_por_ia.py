@@ -25,9 +25,28 @@ COMO SE ENCAIXA
   devolve a lista exatamente como veio. O episódio nunca deixa de sair por
   causa desta etapa.
 
+PROVEDOR — funciona com qualquer serviço, de graça
+  Quase todo provedor fala o mesmo dialeto (o "chat/completions" da OpenAI),
+  então trocar de um para outro é só mudar variável de ambiente. Basta ter a
+  chave de UM deles; o módulo detecta sozinho qual está disponível.
+
+  Gratuitos, sem cartão de crédito (setembro/2026):
+    GROQ_API_KEY        console.groq.com     — llama 3.3 70B, 1.000 req/dia
+    GEMINI_API_KEY      aistudio.google.com  — Gemini Flash, modelo de ponta
+    OPENROUTER_API_KEY  openrouter.ai        — catálogo de modelos ':free',
+                                               incluindo os Kimi da Moonshot
+  Pagos, se um dia quiser:
+    ANTHROPIC_API_KEY, MOONSHOT_API_KEY
+
+  O podcast faz UMA chamada por dia, de ~3.000 tokens. Qualquer um dos
+  gratuitos cobre isso com folga enorme.
+
 Configuração (variáveis de ambiente):
-  ANTHROPIC_API_KEY   — chave da API (se ausente, a etapa é pulada)
-  IA_MODELO           — padrão: claude-haiku-4-5-20251001
+  <PROVEDOR>_API_KEY  — a chave. Sem nenhuma, a etapa é simplesmente pulada.
+  IA_PROVEDOR         — força um provedor (groq|gemini|openrouter|moonshot|
+                        anthropic). Se ausente, usa o primeiro com chave.
+  IA_MODELO           — troca o modelo do provedor escolhido
+  IA_BASE_URL         — endpoint próprio (qualquer API compatível com OpenAI)
   IA_PESO             — padrão: 2.0 (quanto cada ponto da nota vale no total)
 """
 
@@ -36,12 +55,54 @@ import json
 import urllib.request
 import urllib.error
 
-API_URL   = "https://api.anthropic.com/v1/messages"
-MODELO    = os.environ.get("IA_MODELO") or "claude-haiku-4-5-20251001"
+# ── Provedores conhecidos ─────────────────────────────────────────────────────
+# (url, modelo padrão, variável da chave, formato)
+PROVEDORES = {
+    "groq": (
+        "https://api.groq.com/openai/v1/chat/completions",
+        "llama-3.3-70b-versatile", "GROQ_API_KEY", "openai"),
+    "gemini": (
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "gemini-2.5-flash", "GEMINI_API_KEY", "openai"),
+    "openrouter": (
+        "https://openrouter.ai/api/v1/chat/completions",
+        "moonshotai/kimi-k2:free", "OPENROUTER_API_KEY", "openai"),
+    "moonshot": (
+        "https://api.moonshot.ai/v1/chat/completions",
+        "kimi-k2-0711-preview", "MOONSHOT_API_KEY", "openai"),
+    "anthropic": (
+        "https://api.anthropic.com/v1/messages",
+        "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY", "anthropic"),
+}
+
+# Ordem de preferência quando IA_PROVEDOR não é informado: gratuitos primeiro.
+ORDEM_PADRAO = ["groq", "gemini", "openrouter", "moonshot", "anthropic"]
+
 PESO_IA   = float(os.environ.get("IA_PESO") or 2.0)
-TIMEOUT   = 45
+TIMEOUT   = 60
 MAX_CAND  = 25     # candidatas enviadas por chamada
 CHARS_CTX = 320    # trecho de cada matéria enviado junto do título
+
+
+def detectar_provedor():
+    """
+    Descobre qual provedor usar: o forçado por IA_PROVEDOR, ou o primeiro da
+    ordem de preferência que tenha chave definida.
+    Devolve (nome, url, modelo, chave, formato) ou None se não houver nenhuma.
+    """
+    forcado = (os.environ.get("IA_PROVEDOR") or "").strip().lower()
+    ordem   = [forcado] if forcado in PROVEDORES else ORDEM_PADRAO
+
+    for nome in ordem:
+        url, modelo_pad, var_chave, formato = PROVEDORES[nome]
+        chave = os.environ.get(var_chave, "").strip()
+        if not chave:
+            continue
+        return (nome,
+                os.environ.get("IA_BASE_URL") or url,
+                os.environ.get("IA_MODELO")   or modelo_pad,
+                chave, formato)
+    return None
 
 
 def _perfil_em_texto(perfil):
@@ -100,24 +161,28 @@ Responda SOMENTE com um array JSON, sem texto antes ou depois:
 [{{"i": 0, "nota": 7, "motivo": "razão em até 8 palavras"}}, ...]"""
 
 
-def _chamar_api(api_key, prompt):
-    corpo = json.dumps({
-        "model": MODELO,
-        "max_tokens": 1500,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
+def _chamar_api(url, modelo, chave, formato, prompt):
+    """Uma chamada de inferência. Dois formatos cobrem todos os provedores."""
+    if formato == "anthropic":
+        corpo = {"model": modelo, "max_tokens": 1500,
+                 "messages": [{"role": "user", "content": prompt}]}
+        headers = {"x-api-key": chave,
+                   "anthropic-version": "2023-06-01",
+                   "content-type": "application/json"}
+    else:   # dialeto OpenAI — Groq, Gemini, OpenRouter, Moonshot e afins
+        corpo = {"model": modelo, "max_tokens": 1500, "temperature": 0,
+                 "messages": [{"role": "user", "content": prompt}]}
+        headers = {"Authorization": f"Bearer {chave}",
+                   "Content-Type": "application/json"}
 
     req = urllib.request.Request(
-        API_URL, data=corpo,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-    )
+        url, data=json.dumps(corpo).encode("utf-8"), headers=headers)
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         resposta = json.loads(r.read().decode("utf-8"))
-    return resposta["content"][0]["text"]
+
+    if formato == "anthropic":
+        return resposta["content"][0]["text"]
+    return resposta["choices"][0]["message"]["content"]
 
 
 def _extrair_json(texto):
@@ -134,22 +199,35 @@ def reordenar_por_ia(noticias, perfil=None, api_key=None, peso=PESO_IA):
     Reordena `noticias` combinando o score de palavras-chave com a nota da IA.
     Devolve a lista reordenada. Em QUALQUER falha, devolve a lista original.
     """
-    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        print("  ℹ️  ANTHROPIC_API_KEY não definida — classificação por IA desativada.")
-        return noticias
     if not noticias:
         return noticias
 
+    escolhido = detectar_provedor()
+    if not escolhido:
+        print("  ℹ️  Nenhuma chave de IA configurada — classificação por IA desativada.")
+        print("     Grátis, sem cartão: GROQ_API_KEY, GEMINI_API_KEY ou OPENROUTER_API_KEY.")
+        return noticias
+    nome, url, modelo, chave, formato = escolhido
+    if api_key:                       # chave explícita vence a do ambiente
+        chave = api_key
+
     candidatas = noticias[:MAX_CAND]
     try:
-        bruto = _chamar_api(api_key, _montar_prompt(perfil, candidatas))
+        bruto = _chamar_api(url, modelo, chave, formato,
+                            _montar_prompt(perfil, candidatas))
         notas = _extrair_json(bruto)
     except urllib.error.HTTPError as e:
-        print(f"  ⚠️  IA indisponível (HTTP {e.code}) — mantendo ordem por palavras-chave.")
+        detalhe = ""
+        try:
+            detalhe = e.read().decode("utf-8", "replace")[:160]
+        except Exception:
+            pass
+        print(f"  ⚠️  IA indisponível ({nome}, HTTP {e.code}) — mantendo ordem "
+              f"por palavras-chave. {detalhe}")
         return noticias
     except Exception as e:
-        print(f"  ⚠️  Classificação por IA falhou ({e}) — mantendo ordem por palavras-chave.")
+        print(f"  ⚠️  Classificação por IA falhou ({nome}: {e}) — mantendo ordem "
+              f"por palavras-chave.")
         return noticias
 
     aplicadas = 0
@@ -175,7 +253,7 @@ def reordenar_por_ia(noticias, perfil=None, api_key=None, peso=PESO_IA):
 
     noticias.sort(key=lambda x: x.get("score_relevancia", 0), reverse=True)
 
-    print(f"\n  🤖 Classificação por IA ({MODELO}, {aplicadas} notícias):")
+    print(f"\n  🤖 Classificação por IA ({nome}/{modelo}, {aplicadas} notícias):")
     for n in noticias[:6]:
         if "nota_ia" in n:
             print(f"       [IA {n['nota_ia']:>4.1f}] {n.get('titulo','')[:52]}")
