@@ -39,19 +39,58 @@ PERFIL_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perfil
 
 # ── Parâmetros de tempo e tamanho do podcast ──────────────────────────────────
 WPM_PODCAST      = 140   # palavras por minuto narradas em português (ElevenLabs)
-MAX_MIN_PODCAST  = 6     # duração máxima do episódio em minutos (Morning Call enxuto)
-MAX_CHARS_RESUMO = 1500  # caracteres máx por resumo de notícia (~250 palavras)
+MAX_MIN_PODCAST  = 8     # duração máxima do episódio em minutos
+MAX_CHARS_RESUMO = 1300  # caracteres máx por resumo de notícia (~215 palavras)
 
-# Teto RÍGIDO de caracteres enviados ao TTS por episódio. É o controle direto de
-# quota do ElevenLabs (cada caractere consome créditos). O episódio para de
-# incluir notícias assim que este limite — ou o de tempo — seria ultrapassado.
-# ~4500 chars ≈ 5–6 min de áudio. Ajuste este número para gastar mais/menos quota.
-MAX_CHARS_EPISODIO = 4500
+# PISO de notícias por episódio. Garantido mesmo que o score fique abaixo do
+# limiar ou que os tetos de tempo/caracteres sejam atingidos — um episódio com
+# menos de 3 notícias fica pobre demais para justificar a publicação.
+MIN_NOTICIAS_EPISODIO = 3
+
+# Teto RÍGIDO de caracteres JÁ NORMALIZADOS enviados ao TTS por episódio — é o
+# que efetivamente consome quota. Com o modelo turbo_v2_5 cada caractere custa
+# METADE de um crédito:
+#   7000 chars × 0,5 = 3500 créditos/episódio × 22 dias úteis ≈ 77k créditos/mês
+# Folgado dentro do plano Creator (100k) mesmo em meses com 23 dias úteis.
+MAX_CHARS_EPISODIO = 7000
+
+# Teto por notícia, também medido JÁ NORMALIZADO. Dimensionado para que o piso
+# de 3 notícias caiba no teto do episódio mesmo no pior caso (matéria saturada
+# de números):  250 (intro/outro) + 3 × (2100 + 45) = 6685 chars  ✓
+MAX_CHARS_TTS_RESUMO = 2100
 
 # Estimativas fixas usadas no cálculo dos tetos
-_PALAVRAS_INTRO_OUTRO   = 70    # palavras de intro + outro
-_CHARS_INTRO_OUTRO      = 380   # caracteres de intro + outro
-_CHARS_OVERHEAD_NOTICIA = 45    # "Notícia N. <título>." + quebras de linha
+_PALAVRAS_INTRO_OUTRO   = 45    # palavras de intro + outro (abertura enxuta)
+_CHARS_INTRO_OUTRO      = 240   # caracteres de intro + outro
+_CHARS_OVERHEAD_NOTICIA = 45    # rótulo + título + quebras de linha
+
+# Numerais por extenso usados no roteiro — nenhum dígito chega ao TTS
+_CARDINAIS_F = {1:"uma", 2:"duas", 3:"três", 4:"quatro", 5:"cinco",
+                6:"seis", 7:"sete", 8:"oito", 9:"nove", 10:"dez"}
+_ORDINAIS_F  = {1:"Primeira", 2:"Segunda", 3:"Terceira", 4:"Quarta",
+                5:"Quinta", 6:"Sexta", 7:"Sétima", 8:"Oitava",
+                9:"Nona", 10:"Décima"}
+
+
+def chars_no_tts(texto):
+    """
+    Quantos caracteres este texto REALMENTE consumirá no ElevenLabs.
+
+    A normalização para fala expande números por extenso ("R$ 6,2 bi" vira
+    "seis vírgula dois bilhões de reais"), o que pode inflar o texto em 30–70%
+    em matérias densas de dados. Medir o texto bruto subestimaria a quota e
+    estouraria o plano. Aqui medimos o texto final, já normalizado.
+
+    Se o módulo de TTS não estiver disponível (uso isolado do scraper), cai
+    num multiplicador conservador.
+    """
+    try:
+        from elevenlabs_tts import _normalizar_para_fala
+        return len(_normalizar_para_fala(texto))
+    except Exception:
+        # Inflação típica medida em matérias reais: 1,01–1,08; em matérias
+        # saturadas de números chega a 1,7. 1,25 é um meio-termo conservador.
+        return int(len(texto) * 1.25)
 
 # Páginas de seção do Valor (scraping direto, sem RSS)
 VALOR_SECOES = [
@@ -524,21 +563,27 @@ def buscar_noticias(session):
 # ============================================================================
 
 def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST,
-                         min_score=6, max_chars=MAX_CHARS_EPISODIO):
+                         min_score=6, max_chars=MAX_CHARS_EPISODIO,
+                         min_noticias=MIN_NOTICIAS_EPISODIO):
     """
-    Seleciona notícias enriquecidas em ordem de score até o limite de tempo.
+    Seleciona notícias enriquecidas em ordem de score, respeitando os tetos de
+    tempo e de caracteres — mas SEMPRE entregando pelo menos `min_noticias`.
 
     Regras:
-    1. Só inclui artigos com score_relevancia ≥ min_score (filtra ruído).
-    2. Como a lista JÁ está ordenada por score (maior → menor), ao encontrar
-       o primeiro artigo abaixo do limiar encerra — todos os seguintes também estarão.
-    3. Adiciona greedy até que a próxima notícia ultrapassaria max_min.
+    1. Piso rígido: as primeiras `min_noticias` da lista entram no episódio
+       independentemente de score ou de teto. Um episódio com 1–2 notícias fica
+       pobre demais; é preferível estourar um pouco o teto do que publicar isso.
+    2. A partir da (min_noticias+1)-ésima, só entra quem tiver
+       score_relevancia ≥ min_score E couber nos tetos de tempo/caracteres.
+    3. Como a lista já vem ordenada por score, o primeiro artigo abaixo do
+       limiar encerra a varredura — todos os seguintes também estariam.
 
-    Referência de calibração (com MAX_CHARS_RESUMO=1500 chars ≈ 250 palavras):
-      • Intro + outro:  ~70 palavras fixas
-      • Por notícia:    título (~10 pal) + overhead (~5 pal) + resumo (~250 pal) ≈ 265 pal
-      • 5 notícias:     70 +  5×265 ≈ 1395 pal ≈  9.9 min  ← alvo (teto = 10 min)
-      • 6 notícias:     70 +  6×265 ≈ 1660 pal ≈ 11.9 min  ← ultrapassa o teto
+    Referência de calibração (MAX_CHARS_RESUMO=1300 chars ≈ 215 palavras):
+      • Intro + outro:  ~45 palavras fixas
+      • Por notícia:    título (~10 pal) + overhead (~5 pal) + resumo (~215 pal) ≈ 230 pal
+      • 3 notícias:     45 + 3×230 ≈  735 pal ≈ 5.3 min | ~4415 chars
+      • 4 notícias:     45 + 4×230 ≈  965 pal ≈ 6.9 min | ~5760 chars
+      • 5 notícias:     45 + 5×230 ≈ 1195 pal ≈ 8.5 min | ~7105 chars ← estoura
     """
     max_palavras = max_min * wpm
     palavras_usadas = _PALAVRAS_INTRO_OUTRO
@@ -546,34 +591,51 @@ def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST,
     selecionadas = []
     ignoradas_score = 0
     parou_por_chars = False
+    forcadas_piso   = 0
 
     for n in noticias:
         score = n.get("score_relevancia", 0)
 
-        # Lista ordenada por score: primeiro artigo abaixo do limiar encerra
+        conteudo = n.get("conteudo_completo") or n.get("resumo") or ""
+        resumo   = resumir_noticia(conteudo, max_chars=MAX_CHARS_RESUMO,
+                                  max_chars_tts=MAX_CHARS_TTS_RESUMO)
+        titulo   = n.get("titulo", "")
+
+        palavras_noticia = len(titulo.split()) + 5 + len(resumo.split())
+        # Mede o custo REAL no TTS (números por extenso inflam bastante o texto)
+        chars_noticia    = (chars_no_tts(titulo) + chars_no_tts(resumo)
+                            + _CHARS_OVERHEAD_NOTICIA)
+
+        # ── Piso rígido: as primeiras `min_noticias` entram sempre ────────────
+        if len(selecionadas) < min_noticias:
+            if score < min_score:
+                forcadas_piso += 1
+            palavras_usadas += palavras_noticia
+            chars_usados    += chars_noticia
+            selecionadas.append(n)
+            continue
+
+        # ── Acima do piso: score e tetos passam a valer ───────────────────────
         if score < min_score:
             ignoradas_score += 1
             break
 
-        conteudo = n.get("conteudo_completo") or n.get("resumo") or ""
-        resumo   = resumir_noticia(conteudo, max_chars=MAX_CHARS_RESUMO)
-        titulo   = n.get("titulo", "")
-
-        palavras_noticia = len(titulo.split()) + 5 + len(resumo.split())
-        chars_noticia    = len(titulo) + len(resumo) + _CHARS_OVERHEAD_NOTICIA
-
-        # Para se a próxima notícia estourar o teto de TEMPO ou de CARACTERES.
-        # O teto de caracteres é o controle direto de quota do ElevenLabs.
         estoura_tempo = palavras_usadas + palavras_noticia > max_palavras
         estoura_chars = chars_usados + chars_noticia > max_chars
         if estoura_tempo or estoura_chars:
-            if selecionadas:           # garante ao menos 1 notícia no episódio
-                parou_por_chars = estoura_chars and not estoura_tempo
-                break
+            parou_por_chars = estoura_chars and not estoura_tempo
+            break
 
         palavras_usadas += palavras_noticia
         chars_usados    += chars_noticia
         selecionadas.append(n)
+
+    if len(selecionadas) < min_noticias:
+        print(f"\n  ⚠️  Só havia {len(selecionadas)} notícia(s) disponível(is) — "
+              f"piso de {min_noticias} não pôde ser cumprido.")
+    if forcadas_piso:
+        print(f"  ⚑ {forcadas_piso} notícia(s) incluída(s) por piso mínimo "
+              f"(score < {min_score})")
 
     tempo_min = palavras_usadas / wpm
     tempo_seg = int((tempo_min % 1) * 60)
@@ -821,11 +883,18 @@ def enriquecer_artigos(session, noticias, top=5, cookies_list=None):
 # FORMATAÇÃO PARA PODCAST
 # ============================================================================
 
-def resumir_noticia(conteudo, max_chars=500):
+def resumir_noticia(conteudo, max_chars=500, max_chars_tts=None):
     """
-    Extrai um resumo conciso de até max_chars do conteúdo do artigo.
-    Pega os 2-3 primeiros parágrafos mais relevantes.
-    Resultado ideal: 2-4 frases que capturam a essência da notícia.
+    Extrai um resumo conciso do conteúdo do artigo (2-3 primeiros parágrafos).
+
+    Dois limites, ambos por frase inteira — nunca corta no meio de uma frase,
+    porque fragmento truncado é justamente o que faz o locutor tropeçar:
+
+      max_chars      — tamanho do texto bruto.
+      max_chars_tts  — tamanho DEPOIS da normalização para fala. Uma matéria
+                       saturada de números infla até 70% ao virar extenso, então
+                       o limite bruto sozinho subestimaria a quota. Quando
+                       informado, este é o limite que realmente manda.
     """
     if not conteudo:
         return ""
@@ -840,10 +909,12 @@ def resumir_noticia(conteudo, max_chars=500):
         # Pegar só as primeiras frases se o parágrafo for muito longo
         frases = re.split(r'(?<=[.!?])\s+', p)
         for frase in frases:
-            if len(resumo) + len(frase) + 1 <= max_chars:
-                resumo += (" " if resumo else "") + frase
-            else:
+            if len(resumo) + len(frase) + 1 > max_chars:
                 break
+            candidato = (resumo + (" " if resumo else "") + frase)
+            if max_chars_tts and chars_no_tts(candidato) > max_chars_tts:
+                return resumo.strip()      # frase seguinte estouraria a quota
+            resumo = candidato
         if len(resumo) >= max_chars * 0.7:
             break
 
@@ -854,41 +925,47 @@ def formatar_para_podcast(noticias):
     """
     Gera o roteiro narrado do episódio.
 
-    Recebe a lista de notícias JÁ selecionadas por selecionar_por_tempo()
-    — sem cap fixo de quantidade, o limitador é o tempo.
+    Recebe a lista de notícias JÁ selecionadas por selecionar_por_tempo(),
+    que garante o piso de MIN_NOTICIAS_EPISODIO e respeita os tetos de
+    tempo e de quota.
 
-    Resumo por notícia: até MAX_CHARS_RESUMO chars (~250 palavras),
-    suficiente para episódios de 15-20 minutos com 8-10 notícias.
+    Abertura enxuta, sem cabeçalho de data. Nenhum dígito no roteiro:
+    numerais vão por extenso para não travar a narração.
     """
-    meses = ["janeiro","fevereiro","março","abril","maio","junho",
-             "julho","agosto","setembro","outubro","novembro","dezembro"]
-    hoje = datetime.now()
-    dia_semana = ["Segunda-feira","Terça-feira","Quarta-feira","Quinta-feira",
-                  "Sexta-feira","Sábado","Domingo"][hoje.weekday()]
-    data_str = f"{dia_semana}, {hoje.day} de {meses[hoje.month-1]} de {hoje.year}"
+    # Abertura enxuta — sem cabeçalho de data nem apresentação longa.
+    # "Jábali" acentuado ajuda o TTS a acertar a tônica na primeira sílaba.
+    # O numeral vai por extenso porque dígitos soltos travam a narração.
+    q = len(noticias)
+    plural = "notícia" if q == 1 else "notícias"
+    if q in _CARDINAIS_F:
+        abertura = f"Vamos direto às {_CARDINAIS_F[q]} principais {plural}"
+    else:
+        abertura = "Vamos direto às principais notícias"
 
     linhas = [
-        f"Morning Call Jabali. {data_str}.",
-        "",
-        "Bom dia! Você está ouvindo o Morning Call Jabali, seu resumo diário das principais notícias "
-        "de crédito, finanças e mercados do Valor Econômico. Vamos direto ao ponto.",
+        f"Morning Call Jábali. {abertura}.",
         "",
     ]
 
     for i, n in enumerate(noticias, 1):
         titulo   = n["titulo"]
         conteudo = n.get("conteudo_completo") or n.get("resumo") or ""
-        resumo   = resumir_noticia(conteudo, max_chars=MAX_CHARS_RESUMO)
+        resumo   = resumir_noticia(conteudo, max_chars=MAX_CHARS_RESUMO,
+                                  max_chars_tts=MAX_CHARS_TTS_RESUMO)
 
-        linhas.append(f"Notícia {i}. {titulo}.")
+        # Rótulo ordinal ("Primeira notícia") soa muito mais natural que
+        # "Notícia um" e não deixa dígito algum para o TTS interpretar.
+        # Acima da décima usa rótulo neutro — nunca um dígito solto no roteiro.
+        rotulo = (f"{_ORDINAIS_F[i]} notícia" if i in _ORDINAIS_F
+                  else "A seguir")
+        linhas.append(f"{rotulo}. {titulo}.")
         linhas.append("")
         if resumo:
             linhas.append(resumo)
         linhas.append("")
 
     linhas += [
-        f"Essas foram as {len(noticias)} principais notícias de hoje do Valor Econômico.",
-        "Tenha um excelente dia de negócios. Até amanhã!",
+        "Por hoje é só. Tenha um excelente dia de negócios.",
     ]
 
     roteiro  = "\n".join(linhas)
@@ -964,7 +1041,7 @@ def main():
     print(f"\n💾 JSON: {json_file}")
 
     # Salvar texto do podcast
-    texto = formatar_para_podcast(noticias[:10])
+    texto = formatar_para_podcast(selecionar_por_tempo(noticias[:10]))
     txt_file = os.path.join(base, f"texto_episodio_{ts}.txt")
     with open(txt_file, "w", encoding="utf-8") as f:
         f.write(texto)

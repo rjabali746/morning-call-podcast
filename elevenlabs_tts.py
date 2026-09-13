@@ -10,7 +10,7 @@ Uso:
     python3 elevenlabs_tts.py --listar-vozes   # lista vozes disponíveis
 """
 
-import os, sys, json, glob, re, requests
+import os, sys, json, glob, re, math, requests
 from datetime import datetime
 
 BASE        = os.path.dirname(os.path.abspath(__file__))
@@ -21,7 +21,24 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
 
 # Limite de chars por chamada API (ElevenLabs aceita até 5000)
-CHUNK_SIZE = 4800
+CHUNK_SIZE = 4500      # alvo por chunk — deixa folga para o rebalanceamento
+HARD_LIMIT = 4900      # teto absoluto aceito pela API
+MIN_CHUNK_SIZE = 600   # abaixo disso o modelo perde contexto e "gagueja"
+
+# Contexto passado ao TTS nas junções entre chunks. Melhora a prosódia na
+# emenda (entonação e ritmo continuam naturais) e NÃO é sintetizado nem
+# cobrado — serve apenas para condicionar o modelo.
+CONTEXTO_CHARS = 500
+
+# ── Ajustes de voz ────────────────────────────────────────────────────────────
+# Para locução jornalística o que importa é consistência, não expressividade.
+# stability alta + style zerado reduzem drasticamente os artefatos e as
+# "alucinações" do modelo — que é o que fazia o locutor dar pau no episódio.
+# Sobrescrevíveis por variável de ambiente, sem editar código.
+VOICE_STABILITY  = float(os.environ.get("ELEVENLABS_STABILITY")  or 0.70)
+VOICE_SIMILARITY = float(os.environ.get("ELEVENLABS_SIMILARITY") or 0.80)
+VOICE_STYLE      = float(os.environ.get("ELEVENLABS_STYLE")      or 0.0)
+OUTPUT_FORMAT    = os.environ.get("ELEVENLABS_OUTPUT_FORMAT") or "mp3_44100_128"
 
 
 # ============================================================================
@@ -55,6 +72,10 @@ _MAG_EXPAND = {
     "bilhão":  "bilhão",   "bilhões": "bilhões",
     "milhão":  "milhão",   "milhões": "milhões",
     "trilhão": "trilhão",  "trilhões":"trilhões",
+    # variantes sem acento (texto raspado nem sempre preserva acentuação)
+    "bilhao":  "bilhão",   "bilhoes": "bilhões",
+    "milhao":  "milhão",   "milhoes": "milhões",
+    "trilhao": "trilhão",  "trilhoes":"trilhões",
     "mil":     "mil",
 }
 
@@ -80,6 +101,80 @@ PRONUNCIA = {
     "bps":   "pontos-base",
 }
 
+# ── Números por extenso (pt-BR) ───────────────────────────────────────────────
+# CAUSA RAIZ dos "travamentos" da narração: o ElevenLabs decide sozinho como ler
+# um dígito e, em pt-BR, erra com frequência — repete, gagueja ou pula o número.
+# A solução robusta é não enviar dígito nenhum: tudo vira palavra antes do TTS.
+
+_UNI      = ["zero","um","dois","três","quatro","cinco","seis","sete","oito","nove"]
+_DEZ      = ["dez","onze","doze","treze","quatorze","quinze","dezesseis",
+             "dezessete","dezoito","dezenove"]
+_DEZENAS  = ["","","vinte","trinta","quarenta","cinquenta","sessenta",
+             "setenta","oitenta","noventa"]
+_CENTENAS = ["","cento","duzentos","trezentos","quatrocentos","quinhentos",
+             "seiscentos","setecentos","oitocentos","novecentos"]
+
+_ESCALAS = [(10**12, "trilhão", "trilhões"),
+            (10**9,  "bilhão",  "bilhões"),
+            (10**6,  "milhão",  "milhões"),
+            (10**3,  "mil",     "mil")]
+
+def _grupo_ate_999(n):
+    """Converte 1–999 por extenso."""
+    if n == 0:
+        return ""
+    if n == 100:
+        return "cem"
+    c, r = divmod(n, 100)
+    partes = []
+    if c:
+        partes.append(_CENTENAS[c])
+    if r:
+        if r < 10:
+            partes.append(_UNI[r])
+        elif r < 20:
+            partes.append(_DEZ[r - 10])
+        else:
+            d, u = divmod(r, 10)
+            partes.append(_DEZENAS[d] + (f" e {_UNI[u]}" if u else ""))
+    return " e ".join(partes)
+
+def num_por_extenso(n):
+    """Converte um inteiro para extenso em pt-BR (até casa dos trilhões)."""
+    n = int(n)
+    if n < 0:
+        return "menos " + num_por_extenso(-n)
+    if n == 0:
+        return "zero"
+    if n >= 10**15:                 # absurdamente grande — não vale arriscar
+        return " ".join(_UNI[int(d)] for d in str(n))
+
+    grupos, resto = [], n
+    for valor, sing, plur in _ESCALAS:
+        q, resto = divmod(resto, valor)
+        if not q:
+            continue
+        if valor == 10**3:
+            grupos.append("mil" if q == 1 else f"{_grupo_ate_999(q)} mil")
+        else:
+            grupos.append(f"{_grupo_ate_999(q)} {sing if q == 1 else plur}")
+    if resto:
+        grupos.append(_grupo_ate_999(resto))
+
+    if len(grupos) == 1:
+        return grupos[0]
+    # Regra do 'e' em pt-BR: liga o último grupo quando ele é < 100,
+    # múltiplo de 100, ou quando não há resto ('um milhão e duzentos mil').
+    usar_e = (resto == 0) or (resto < 100) or (resto % 100 == 0)
+    sep = " e " if usar_e else ", "
+    return ", ".join(grupos[:-1]) + sep + grupos[-1]
+
+def _decimal_por_extenso(dec):
+    """Parte decimal: '35'→'trinta e cinco'; '05'→'zero cinco'; '125'→dígitos."""
+    if len(dec) <= 2 and not dec.startswith("0"):
+        return num_por_extenso(int(dec))
+    return " ".join(_UNI[int(d)] for d in dec)
+
 def _valor_com_moeda(inteiro, moeda):
     """'1' → '1 real'/'1 dólar'; caso geral → 'N reais'/'N dólares'."""
     if inteiro == "1":
@@ -102,6 +197,10 @@ def _moeda_para_fala(m):
 
     if mag_raw:
         mag = _MAG_EXPAND.get(mag_raw, mag_raw)
+        # 'mil' não leva preposição: "quinhentos mil reais", jamais
+        # "quinhentos mil DE reais" (só milhão/bilhão/trilhão pedem o 'de').
+        if mag == "mil":
+            return f"{valor} mil {moeda}"
         return f"{valor} {mag} de {moeda}"
 
     valor = valor.replace(".", "")            # remove separador de milhar
@@ -114,8 +213,12 @@ def _moeda_para_fala(m):
         return f"{_valor_com_moeda(inteiro, moeda)} e {dec} {cent_moeda}"
     return _valor_com_moeda(valor, moeda)
 
-# Padrão de magnitude para uso nas regex
-_MAG_PAT = r"bilh(?:ão|ões)|milh(?:ão|ões)|trilh(?:ão|ões)|tri|bi|mi|mil"
+# Padrão de magnitude para uso nas regex.
+# Aceita as formas sem acento (bilhao/bilhoes) porque o texto raspado nem sempre
+# preserva a acentuação — e um "trilhões" não reconhecido vira
+# "seis reais e vinte centavos trilhoes", que destrói a narração.
+_MAG_PAT = (r"bilh(?:ão|ões|ao|oes)|milh(?:ão|ões|ao|oes)|trilh(?:ão|ões|ao|oes)"
+            r"|tri|bi|mi|mil")
 
 def _normalizar_para_fala(texto):
     """
@@ -136,9 +239,13 @@ def _normalizar_para_fala(texto):
     texto = re.sub(r"\d{1,3}(?:\.\d{3})+",
                    lambda m: m.group(0).replace(".", ""), texto)
 
-    # 3. Moeda R$ / US$ — inclui abreviações bi/mi/tri além das formas plenas
+    # 3. Moeda R$ / US$ — inclui abreviações bi/mi/tri além das formas plenas.
+    #    O valor é `\d+(?:[.,]\d+)*` e NÃO `[\d.,]+`: a classe gulosa engolia o
+    #    ponto final da frase ("R$ 45,20. Alta de 2%" perdia o ponto e virava
+    #    uma frase só), apagando a pausa da narração e estragando o corte em
+    #    chunks, que depende da pontuação.
     texto = re.sub(
-        rf"(?:R\$|US\$)\s*([\d.,]+)(?:\s+({_MAG_PAT})\b)?",
+        rf"(?:R\$|US\$)\s*(\d+(?:[.,]\d+)*)(?:\s+({_MAG_PAT})\b)?",
         _moeda_para_fala, texto)
 
     # 4. Magnitudes sem símbolo de moeda: '4,5 bi lucro' → '4,5 bilhões lucro'
@@ -166,13 +273,26 @@ def _normalizar_para_fala(texto):
         return lst[n] if 1 <= n < len(lst) else m.group(0)
     texto = re.sub(r"\b(\d+)([ºª])\b", _ordinal, texto)
 
-    # 8. Vírgula decimal restante → ' vírgula ' (só entre dígitos)
-    texto = re.sub(r"(\d),(\d)", r"\1 vírgula \2", texto)
+    # 8. Sinais colados a números → palavra
+    texto = re.sub(r"(?<!\w)\+(?=\d)", "mais ",  texto)
+    texto = re.sub(r"(?<![\w\d])-(?=\d)", "menos ", texto)
 
-    # 9. Dicionário de siglas e expressões (palavra inteira)
+    # 9. Decimais por extenso: '13,25' → 'treze vírgula vinte e cinco'
+    texto = re.sub(
+        r"(\d+),(\d+)",
+        lambda m: f"{num_por_extenso(m.group(1))} vírgula {_decimal_por_extenso(m.group(2))}",
+        texto)
+
+    # 10. Inteiros restantes por extenso — depois deste passo NÃO sobra
+    #     nenhum dígito no texto enviado ao TTS.
+    texto = re.sub(r"\d+", lambda m: num_por_extenso(m.group(0)), texto)
+
+    # 11. Dicionário de siglas e expressões (palavra inteira)
     for sigla, expan in PRONUNCIA.items():
         texto = re.sub(rf"(?<!\w){re.escape(sigla)}(?!\w)", expan, texto)
 
+    # 12. Limpeza de espaços duplicados gerados pelas substituições
+    texto = re.sub(r"[ \t]{2,}", " ", texto)
     return texto
 
 def limpar_texto_para_audio(texto):
@@ -189,40 +309,73 @@ def limpar_texto_para_audio(texto):
 
 def dividir_em_chunks(texto, tamanho=CHUNK_SIZE):
     """
-    Divide o texto em chunks respeitando parágrafos e frases.
-    ElevenLabs tem limite de ~5000 chars por chamada.
+    Divide o texto em chunks EQUILIBRADOS, respeitando parágrafos e frases.
+
+    Por que equilibrado e não guloso: o preenchimento guloso (encher até o teto
+    e jogar o resto no último chunk) costuma deixar um chunk final minúsculo.
+    Um trecho curto dá pouquíssimo contexto ao modelo e é a causa mais comum de
+    narração truncada, gaguejada ou "alucinada" no fim do episódio — exatamente
+    o defeito relatado. Dividindo em partes de tamanho parecido, nenhum chunk
+    fica curto o bastante para disparar esse comportamento.
     """
     if len(texto) <= tamanho:
         return [texto]
 
-    chunks = []
-    paragrafos = texto.split("\n\n")
-    chunk_atual = ""
+    def _empacotar(alvo):
+        """Preenche chunks respeitando parágrafos (e frases, se preciso)."""
+        chunks, atual = [], ""
 
-    for paragrafo in paragrafos:
-        if len(chunk_atual) + len(paragrafo) + 2 <= tamanho:
-            chunk_atual += ("\n\n" if chunk_atual else "") + paragrafo
-        else:
-            if chunk_atual:
-                chunks.append(chunk_atual)
-            # Se parágrafo sozinho é maior que o limite, divide por frases
-            if len(paragrafo) > tamanho:
-                frases = re.split(r'(?<=[.!?])\s+', paragrafo)
-                chunk_atual = ""
-                for frase in frases:
-                    if len(chunk_atual) + len(frase) + 1 <= tamanho:
-                        chunk_atual += (" " if chunk_atual else "") + frase
-                    else:
-                        if chunk_atual:
-                            chunks.append(chunk_atual)
-                        chunk_atual = frase
-            else:
-                chunk_atual = paragrafo
+        def fechar():
+            nonlocal atual
+            if atual.strip():
+                chunks.append(atual.strip())
+            atual = ""
 
-    if chunk_atual:
-        chunks.append(chunk_atual)
+        for paragrafo in texto.split("\n\n"):
+            if not paragrafo.strip():
+                continue
+            if len(paragrafo) > alvo:          # parágrafo gigante → por frases
+                fechar()
+                for frase in re.split(r"(?<=[.!?])\s+", paragrafo):
+                    # Frase que sozinha excede o limite duro da API (texto sem
+                    # pontuação) precisa ser quebrada por palavras, senão a
+                    # chamada volta HTTP 400 e o episódio inteiro falha.
+                    while len(frase) > HARD_LIMIT:
+                        fechar()
+                        corte = frase.rfind(" ", 0, HARD_LIMIT)
+                        corte = corte if corte > 0 else HARD_LIMIT
+                        chunks.append(frase[:corte].strip())
+                        frase = frase[corte:].lstrip()
+                    if atual and len(atual) + len(frase) + 1 > alvo:
+                        fechar()
+                    atual += (" " if atual else "") + frase
+                continue
+            if atual and len(atual) + len(paragrafo) + 2 > alvo:
+                fechar()
+            atual += ("\n\n" if atual else "") + paragrafo
+        fechar()
+        return chunks
 
-    return chunks
+    # 1ª passada: preenchimento até o teto → número MÍNIMO de chunks.
+    # Menos chunks = menos emendas = menos oportunidade de falha.
+    base = _empacotar(tamanho)
+
+    # 2ª passada: com o mesmo número de chunks, redistribui para que fiquem
+    # parelhos. Só adota o resultado se não aumentar a contagem de chunks.
+    if len(base) > 1:
+        equilibrado = _empacotar(math.ceil(len(texto) / len(base)))
+        if len(equilibrado) <= len(base):
+            base = equilibrado
+
+    # Rede de segurança: chunk final curto demais é fundido no anterior
+    # (desde que o resultado caiba no limite duro da API).
+    while len(base) > 1 and len(base[-1]) < MIN_CHUNK_SIZE:
+        if len(base[-2]) + len(base[-1]) + 2 > HARD_LIMIT:
+            break
+        ultimo = base.pop()
+        base[-1] = base[-1] + "\n\n" + ultimo
+
+    return base
 
 
 # ============================================================================
@@ -374,19 +527,36 @@ def verificar_ou_descobrir_voice_id(api_key, voice_id_configurado):
         "(3) Vozes em https://elevenlabs.io/app/voice-lab"
     )
 
-def gerar_chunk_audio(api_key, voice_id, model, texto, language_code=None):
-    """Gera áudio para um chunk de texto via ElevenLabs API."""
+def gerar_chunk_audio(api_key, voice_id, model, texto, language_code=None,
+                      previous_text=None, next_text=None):
+    """
+    Gera áudio para um chunk de texto via ElevenLabs API.
+
+    previous_text / next_text: trechos vizinhos passados como CONTEXTO. O modelo
+    usa-os para manter entonação e ritmo contínuos na emenda entre chunks, mas
+    não os sintetiza nem cobra por eles. Sem isso, cada chunk recomeça "do zero"
+    e a junção soa como um corte seco — ou pior, o modelo perde o fio no início.
+    """
     url  = f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}"
     body = {
         "text": texto,
         "model_id": model,
         "voice_settings": {
-            "stability":        0.55,   # 0-1: mais alto = mais consistente
-            "similarity_boost": 0.80,   # 0-1: mais alto = mais fiel à voz
-            "style":            0.20,   # expressividade
-            "use_speaker_boost": True
-        }
+            "stability":        VOICE_STABILITY,   # alto = locução consistente
+            "similarity_boost": VOICE_SIMILARITY,  # fidelidade à voz
+            "style":            VOICE_STYLE,       # 0 = sem exagero expressivo
+            "use_speaker_boost": True,
+        },
     }
+    # Formato fixo em todos os chunks — indispensável porque os MP3s são
+    # concatenados byte a byte; bitrates diferentes causariam estalos.
+    params = {"output_format": OUTPUT_FORMAT}
+
+    if previous_text:
+        body["previous_text"] = previous_text[-CONTEXTO_CHARS:]
+    if next_text:
+        body["next_text"] = next_text[:CONTEXTO_CHARS]
+
     # language_code força o idioma — suportado só pelos modelos turbo/flash v2.5.
     # (O multilingual_v2 ignora/rejeita o parâmetro, então só enviamos quando cabe.)
     if language_code and ("turbo" in model or "flash" in model):
@@ -397,7 +567,7 @@ def gerar_chunk_audio(api_key, voice_id, model, texto, language_code=None):
         "Accept":       "audio/mpeg"
     }
 
-    resp = requests.post(url, json=body, headers=headers, timeout=60)
+    resp = requests.post(url, json=body, params=params, headers=headers, timeout=90)
 
     if resp.status_code != 200:
         raise Exception(f"ElevenLabs API erro {resp.status_code}: {resp.text[:200]}")
@@ -460,7 +630,13 @@ def gerar_audio(txt_file=None):
         print(f"  [{i}/{len(chunks)}] {len(chunk):,} chars... ", end="", flush=True)
         t0 = datetime.now()
         try:
-            audio_bytes += gerar_chunk_audio(api_key, voice_id, model, chunk, lang_code)
+            # Mesmo contexto de vizinhança usado no pipeline — mantém a
+            # prosódia contínua nas emendas entre chunks.
+            audio_bytes += gerar_chunk_audio(
+                api_key, voice_id, model, chunk, lang_code,
+                previous_text=chunks[i - 2] if i > 1 else None,
+                next_text=chunks[i] if i < len(chunks) else None,
+            )
             secs = (datetime.now() - t0).seconds
             print(f"✅ ({secs}s)")
         except Exception as e:

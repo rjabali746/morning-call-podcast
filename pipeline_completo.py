@@ -315,16 +315,38 @@ def etapa_tts(txt_path: str, config: dict) -> str:
     ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
     mp3_path  = audio_dir / f"podcast_{ts}.mp3"
 
+    log.info(f"  ✂️  {len(chunks)} chunk(s): "
+             + ", ".join(f"{len(c):,}" for c in chunks) + " chars")
+
     audio_bytes = b""
-    for i, chunk in enumerate(chunks, 1):
-        log.info(f"  [{i}/{len(chunks)}] {len(chunk):,} chars...")
-        audio_bytes += gerar_chunk_audio(api_key, voice_id, model, chunk, lang_code)
+    for i, chunk in enumerate(chunks):
+        # Contexto dos vizinhos: mantém a prosódia contínua na emenda.
+        anterior = chunks[i - 1] if i > 0 else None
+        seguinte = chunks[i + 1] if i + 1 < len(chunks) else None
+        log.info(f"  [{i+1}/{len(chunks)}] {len(chunk):,} chars...")
+        parte = gerar_chunk_audio(
+            api_key, voice_id, model, chunk, lang_code,
+            previous_text=anterior, next_text=seguinte,
+        )
+        # Sanidade por chunk. Em mp3_44100_128 a fala em pt-BR rende cerca de
+        # 1.000 bytes por caractere de texto; exigimos 40% disso para tolerar
+        # variação de ritmo sem deixar passar narração truncada — foi esse tipo
+        # de retorno curto que publicou o episódio quebrado.
+        minimo_esperado = max(8000, int(len(chunk) * 400))
+        if len(parte) < minimo_esperado:
+            raise RuntimeError(
+                f"Chunk {i+1}/{len(chunks)} retornou áudio suspeito: "
+                f"{len(parte):,} bytes para {len(chunk):,} chars "
+                f"(esperado ≥ {minimo_esperado:,}). Narração provavelmente truncada."
+            )
+        audio_bytes += parte
 
     with open(mp3_path, "wb") as f:
         f.write(audio_bytes)
 
     tamanho_mb = mp3_path.stat().st_size / (1024 * 1024)
-    log.info(f"  ✅ {mp3_path.name} ({tamanho_mb:.1f} MB)")
+    dur_est    = len(texto) / 950   # ~950 chars por minuto narrado em pt-BR
+    log.info(f"  ✅ {mp3_path.name} ({tamanho_mb:.1f} MB, ~{dur_est:.1f} min)")
     return str(mp3_path)
 
 
@@ -473,8 +495,15 @@ def main():
         if not noticias_fb:
             log.error("❌ Sem fallback disponível. Pipeline abortado.")
             sys.exit(1)
-        from valor_economico_scraper import formatar_para_podcast
-        texto    = formatar_para_podcast(noticias_fb[:10])
+        # Mesmo no fallback o episódio passa por selecionar_por_tempo(): é ela
+        # que aplica o piso de 3 notícias e os tetos de tempo/quota. Formatar
+        # direto os 10 artigos estouraria a quota do ElevenLabs.
+        from valor_economico_scraper import (
+            formatar_para_podcast, selecionar_por_tempo,
+        )
+        sel_fb   = selecionar_por_tempo(noticias_fb[:10])
+        log.info(f"  🎙️  {len(sel_fb)} notícias selecionadas (fallback)")
+        texto    = formatar_para_podcast(sel_fb)
         ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
         txt_path = str(BASE / f"texto_episodio_{ts}.txt")
         with open(txt_path, "w", encoding="utf-8") as f:
