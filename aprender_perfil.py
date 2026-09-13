@@ -36,7 +36,9 @@ import html
 import shutil
 import datetime
 import urllib.request
+import unicodedata
 from collections import Counter
+from functools import lru_cache
 
 BASE        = os.path.dirname(os.path.abspath(__file__))
 PERFIL_FILE = os.path.join(BASE, "perfil_interesses.json")
@@ -196,20 +198,32 @@ def preparar_manchete(texto):
 # ---------------------------------------------------------------------------
 _PADRAO_CACHE = {}
 
+def sem_acento(texto):
+    """Remove acentos ('crédito' → 'credito') — espelha o scraper."""
+    return "".join(c for c in unicodedata.normalize("NFKD", texto)
+                   if not unicodedata.combining(c))
+
+
+@lru_cache(maxsize=128)
+def _texto_sem_acento(texto):
+    return sem_acento(texto)
+
+
 def _fragmento_flexivel(palavra):
-    """Regex de uma palavra, tolerante a plural — espelha o scraper."""
-    w = re.escape(palavra)
+    """Regex de uma palavra, tolerante a plural e a acento — espelha o scraper."""
+    p = sem_acento(palavra)
+    w = re.escape(p)
     if len(palavra) < 3:
         return w
     if palavra.endswith("ão"):
-        return re.escape(palavra[:-2]) + r"(?:ão|ões|ãos|ães)"
-    if palavra.endswith("s"):
+        return re.escape(p[:-2]) + r"(?:ao|oes|aos|aes)"
+    if p.endswith("s"):
         return w
-    if palavra.endswith("l"):
-        return r"(?:" + w + r"|" + re.escape(palavra[:-1]) + r"is)"
-    if palavra.endswith("m"):
-        return r"(?:" + w + r"|" + re.escape(palavra[:-1]) + r"ns)"
-    if palavra.endswith(("r", "z")):
+    if p.endswith("l"):
+        return r"(?:" + w + r"|" + re.escape(p[:-1]) + r"is)"
+    if p.endswith("m"):
+        return r"(?:" + w + r"|" + re.escape(p[:-1]) + r"ns)"
+    if p.endswith(("r", "z")):
         return w + r"(?:es)?"
     return w + r"s?"
 
@@ -229,7 +243,7 @@ def casa_termo(palavra, texto):
         corpo = r"\s+".join(_fragmento_flexivel(w) for w in p.split())
         padrao = re.compile(r"(?<!\w)" + corpo + r"(?!\w)")
         _PADRAO_CACHE[p] = padrao
-    return bool(padrao.search(texto))
+    return bool(padrao.search(_texto_sem_acento(texto)))
 
 
 def calcular_score(titulo, perfil):

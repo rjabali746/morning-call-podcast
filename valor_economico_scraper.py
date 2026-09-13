@@ -12,7 +12,8 @@ Estratégia:
   5. Busca de conteúdo completo dos top 5 artigos
 """
 
-import os, json, time, sys, re, requests
+import os, json, time, sys, re, unicodedata, requests
+from functools import lru_cache
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
@@ -172,27 +173,43 @@ _perfil_cache = None
 # "nada a ver". Com fronteira de palavra, só casa o termo de verdade.
 _PADRAO_CACHE = {}
 
+def sem_acento(texto):
+    """Remove acentos, preservando o resto ('crédito' → 'credito')."""
+    return "".join(c for c in unicodedata.normalize("NFKD", texto)
+                   if not unicodedata.combining(c))
+
+
+@lru_cache(maxsize=128)
+def _texto_sem_acento(texto):
+    """Versão sem acento do texto, memorizada — o mesmo texto é comparado
+    contra centenas de termos numa única pontuação."""
+    return sem_acento(texto)
+
+
 def _fragmento_flexivel(palavra):
     """
-    Regex de UMA palavra, tolerante a plural em pt-BR.
+    Regex de UMA palavra: tolerante a plural E a falta de acento.
 
-    Sem isso, exigir palavra inteira criaria um problema novo: o perfil tem
-    "adquirente" mas a manchete diz "adquirentes"; tem "microcrédito" mas a
-    manchete diz "microcréditos". O filtro passaria a descartar notícia boa —
-    e pior, no portão eh_relevante(), antes mesmo de pontuar.
+    Plural, porque o perfil tem "adquirente" e a manchete diz "adquirentes".
+    Acento, porque o texto nem sempre vem acentuado — matérias raspadas
+    perdem acento, e quando o título é derivado do endereço da matéria
+    (caso de link colado na planilha) ele vem todo sem acento: "antecipacao
+    de recebiveis" não casava com "antecipação de recebíveis" e a notícia
+    tirava zero.
     """
-    w = re.escape(palavra)
+    p = sem_acento(palavra)
+    w = re.escape(p)
     if len(palavra) < 3:
         return w                                   # "ip", "bb": sem flexão
-    if palavra.endswith("ão"):                     # cartão → cartões
-        return re.escape(palavra[:-2]) + r"(?:ão|ões|ãos|ães)"
-    if palavra.endswith("s"):                      # juros, recebíveis: invariante
+    if palavra.endswith("ão"):                     # cartão → cartões/cartoes
+        return re.escape(p[:-2]) + r"(?:ao|oes|aos|aes)"
+    if p.endswith("s"):                            # juros, recebíveis: invariante
         return w
-    if palavra.endswith("l"):                      # digital → digitais
-        return r"(?:" + w + r"|" + re.escape(palavra[:-1]) + r"is)"
-    if palavra.endswith("m"):                      # bem → bens
-        return r"(?:" + w + r"|" + re.escape(palavra[:-1]) + r"ns)"
-    if palavra.endswith(("r", "z")):               # mulher → mulheres
+    if p.endswith("l"):                            # digital → digitais
+        return r"(?:" + w + r"|" + re.escape(p[:-1]) + r"is)"
+    if p.endswith("m"):                            # bem → bens
+        return r"(?:" + w + r"|" + re.escape(p[:-1]) + r"ns)"
+    if p.endswith(("r", "z")):                     # mulher → mulheres
         return w + r"(?:es)?"
     return w + r"s?"                               # caso geral
 
@@ -216,7 +233,7 @@ def casa_termo(palavra, texto):
         # começam/terminam em símbolo, como "s&p" e "m&a".
         padrao = re.compile(r"(?<!\w)" + corpo + r"(?!\w)")
         _PADRAO_CACHE[p] = padrao
-    return bool(padrao.search(texto))
+    return bool(padrao.search(_texto_sem_acento(texto)))
 
 def carregar_perfil():
     """Carrega o perfil de interesses personalizado do Roberto."""
@@ -320,10 +337,15 @@ def calcular_score_perfil(noticia, perfil):
     ]:
         tier = entidades_cfg.get(tier_key, {})
         bonus_cfg = tier.get("bonus", tier_bonus)
-        for entidade in tier.get("lista", []):
-            if casa_termo(entidade, texto):
-                score += bonus_cfg
-                detalhes.append(f"{tier_key}(+{bonus_cfg}:{entidade.strip()})")
+        # Teto de 2 entidades por tier, igual ao teto de 2 termos por tema.
+        # Sem isso, um texto longo que cita Itaú, Bradesco, Santander, BB e
+        # Caixa de passagem somava +15 só de tier 3 — e isso passou a importar
+        # de verdade quando a pontuação passou a ler o corpo da matéria.
+        achadas = [e for e in tier.get("lista", []) if casa_termo(e, texto)]
+        if achadas:
+            score += bonus_cfg * min(len(achadas), 2)
+            detalhes.append(f"{tier_key}(+{bonus_cfg * min(len(achadas), 2)}:"
+                            f"{','.join(e.strip() for e in achadas[:2])})")
 
     # ── Penalizações ─────────────────────────────────────────────────────────
     for pen in perfil.get("penalizacoes", []):
@@ -661,6 +683,55 @@ def buscar_noticias(session):
 # ============================================================================
 # SELEÇÃO POR TEMPO
 # ============================================================================
+
+# Quanto do corpo da matéria entra na repontuação. O miolo do assunto está nos
+# primeiros parágrafos; ler a matéria inteira só acrescenta menções laterais.
+CHARS_CORPO_PARA_SCORE = 2500
+
+
+def repontuar_com_conteudo(noticias, perfil=None, max_chars=CHARS_CORPO_PARA_SCORE):
+    """
+    Segunda passada de pontuação, agora com o CORPO da matéria.
+
+    A primeira passada acontece em buscar_noticias(), quando só existem título
+    e linha de apoio — o texto completo ainda nem foi baixado. Ou seja: a
+    decisão era tomada sobre a manchete, e manchete de jornal é escrita para
+    chamar atenção, não para descrever o conteúdo. Duas consequências:
+
+      • matéria de título vago mas miolo muito relevante ficava de fora;
+      • matéria que promete no título e não entrega ficava dentro.
+
+    Aqui repontuamos as já enriquecidas e reordenamos. Quem não tem corpo
+    baixado mantém a nota da manchete.
+    """
+    if perfil is None:
+        perfil = carregar_perfil()
+
+    mudancas = []
+    for n in noticias:
+        corpo = n.get("conteudo_completo") or ""
+        if not corpo:
+            continue
+        antes = n.get("score_relevancia", 0)
+        # Vetos e penalizações continuam valendo sobre o texto ampliado
+        novo, det = calcular_score_perfil(
+            {"titulo": n.get("titulo", ""), "resumo": corpo[:max_chars]}, perfil)
+        n["score_relevancia"] = novo
+        n["score_detalhes"]   = det
+        n["score_manchete"]   = antes
+        if novo != antes:
+            mudancas.append((n.get("titulo", "")[:52], antes, novo))
+
+    noticias.sort(key=lambda x: x.get("score_relevancia", 0), reverse=True)
+
+    if mudancas:
+        print(f"\n  🔍 Repontuação com o texto completo ({len(mudancas)} mudaram):")
+        for titulo, antes, depois in sorted(mudancas, key=lambda x: x[2] - x[1],
+                                            reverse=True)[:8]:
+            seta = "↑" if depois > antes else "↓"
+            print(f"       {seta} {antes:>3} → {depois:>3}  {titulo}")
+    return noticias
+
 
 def carregar_pool():
     """Lê o pool de reserva, já descartando o que passou da validade."""

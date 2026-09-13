@@ -208,10 +208,12 @@ def etapa_scraping() -> str:
     from valor_economico_scraper import (
         buscar_noticias,
         enriquecer_artigos,
+        repontuar_com_conteudo,
         selecionar_com_resgate,
         carregar_pool,
         salvar_pool,
         formatar_para_podcast,
+        carregar_perfil,
         HEADERS,
     )
 
@@ -262,6 +264,21 @@ def etapa_scraping() -> str:
 
     # Enriquecer até top 10 candidatos com conteúdo completo via Selenium
     noticias = enriquecer_artigos(session, noticias, top=10, cookies_list=cookies_list)
+
+    # ── Segunda passada: repontuar com o CORPO da matéria ────────────────────
+    # A nota inicial saiu só da manchete, que é escrita para chamar atenção e
+    # não para descrever o conteúdo. Agora que o texto foi baixado, repontuamos.
+    perfil = carregar_perfil()
+    noticias = repontuar_com_conteudo(noticias, perfil)
+
+    # ── Terceira passada: reordenação por IA ─────────────────────────────────
+    # Camada opcional. Sem ANTHROPIC_API_KEY, ou em qualquer falha, a ordem por
+    # palavras-chave é mantida e o episódio sai normalmente.
+    try:
+        from classificar_por_ia import reordenar_por_ia
+        noticias = reordenar_por_ia(noticias, perfil)
+    except Exception as e:
+        log.warning(f"  ⚠️  Classificação por IA indisponível ({e}) — seguindo sem ela.")
 
     # Selecionar entre os artigos enriquecidos (top 10). Artigos além do top-10
     # não têm conteúdo completo e distorceriam a estimativa de duração.

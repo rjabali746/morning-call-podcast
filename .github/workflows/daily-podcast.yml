@@ -90,6 +90,8 @@ jobs:
       - name: 🚀 Executar pipeline
         env:
           ELEVENLABS_API_KEY:      ${{ secrets.ELEVENLABS_API_KEY }}
+          # Opcional — sem ela a classificação por IA é simplesmente pulada
+          ANTHROPIC_API_KEY:       ${{ secrets.ANTHROPIC_API_KEY }}
           ELEVENLABS_VOICE_ID:     ${{ secrets.ELEVENLABS_VOICE_ID }}
           ELEVENLABS_MODEL:        ${{ secrets.ELEVENLABS_MODEL }}
           ELEVENLABS_LANGUAGE_CODE: ${{ secrets.ELEVENLABS_LANGUAGE_CODE }}
