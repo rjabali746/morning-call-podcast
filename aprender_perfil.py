@@ -47,7 +47,13 @@ TEMA_NOVOS   = "novos_interesses_a_revisar"
 PESO_NOVOS   = 2   # Baixo propositalmente: termos ainda não revisados pelo Roberto.
                    # Só contribuem como sinal fraco até serem promovidos a temas definitivos.
 PEN_DESCARTE = "descartadas_pelo_usuario"
-PESO_DESCARTE = -4
+# -8 e não -4: um tema core rende +14 (peso 7 × 2 hits), então -4 não derrubava
+# nada. A rejeição explícita do Roberto precisa pesar mais que um tema forte.
+PESO_DESCARTE = -8
+
+# Termo que aparece em VÁRIAS manchetes rejeitadas vira veto (zera a notícia),
+# não só penalização. Rejeitar duas vezes o mesmo assunto é sinal inequívoco.
+MIN_REJEICOES_PARA_VETO = 2
 
 # Score abaixo do qual a manchete é considerada "novidade" (mal capturada).
 # Um tema core (peso 7) com 1 hit já dá 7; abaixo disso é sinal de lacuna.
@@ -188,6 +194,44 @@ def preparar_manchete(texto):
 # Pontuação — réplica fiel de calcular_score_perfil() do valor_economico_scraper.py
 # (mantida inline para o script não depender do selenium.)
 # ---------------------------------------------------------------------------
+_PADRAO_CACHE = {}
+
+def _fragmento_flexivel(palavra):
+    """Regex de uma palavra, tolerante a plural — espelha o scraper."""
+    w = re.escape(palavra)
+    if len(palavra) < 3:
+        return w
+    if palavra.endswith("ão"):
+        return re.escape(palavra[:-2]) + r"(?:ão|ões|ãos|ães)"
+    if palavra.endswith("s"):
+        return w
+    if palavra.endswith("l"):
+        return r"(?:" + w + r"|" + re.escape(palavra[:-1]) + r"is)"
+    if palavra.endswith("m"):
+        return r"(?:" + w + r"|" + re.escape(palavra[:-1]) + r"ns)"
+    if palavra.endswith(("r", "z")):
+        return w + r"(?:es)?"
+    return w + r"s?"
+
+
+def casa_termo(palavra, texto):
+    """Casamento por PALAVRA INTEIRA com flexão de plural.
+
+    Espelha valor_economico_scraper.casa_termo. As duas implementações precisam
+    concordar, senão o aprendizado avalia a manchete com um critério e o
+    scraper com outro.
+    """
+    p = (palavra or "").strip().lower()
+    if not p:
+        return False
+    padrao = _PADRAO_CACHE.get(p)
+    if padrao is None:
+        corpo = r"\s+".join(_fragmento_flexivel(w) for w in p.split())
+        padrao = re.compile(r"(?<!\w)" + corpo + r"(?!\w)")
+        _PADRAO_CACHE[p] = padrao
+    return bool(padrao.search(texto))
+
+
 def calcular_score(titulo, perfil):
     texto = titulo.lower()
     score = 0
@@ -196,8 +240,10 @@ def calcular_score(titulo, perfil):
     for tema in perfil.get("temas", []):
         peso     = tema.get("peso", 1)
         palavras = tema.get("palavras", [])
-        matches  = [p for p in palavras if p.lower() in texto]
+        matches  = [p for p in palavras if casa_termo(p, texto)]
         if matches:
+            matches += [p for p in tema.get("palavras_contextuais", [])
+                        if casa_termo(p, texto)]
             score += peso * min(len(matches), 2)
             temas_hit.append(tema.get("nome", "?"))
 
@@ -210,16 +256,20 @@ def calcular_score(titulo, perfil):
         tier  = ent_cfg.get(tier_key, {})
         bonus = tier.get("bonus", tier_fallback)
         for ent in tier.get("lista", []):
-            if ent.lower() in texto:
+            if casa_termo(ent, texto):
                 score += bonus
                 temas_hit.append(tier_key)
 
     for pen in perfil.get("penalizacoes", []):
         peso_pen = pen.get("peso", -2)
         for palavra in pen.get("palavras", []):
-            if palavra.lower() in texto:
+            if casa_termo(palavra, texto):
                 score += peso_pen
                 break
+
+    for palavra in perfil.get("vetos", []):
+        if casa_termo(palavra, texto):
+            return -99, temas_hit
 
     return score, temas_hit
 
@@ -247,27 +297,65 @@ def _eh_conteudo(tok):
             and not tok.isdigit())
 
 
-def extrair_candidatos(titulo, ja_existentes, permitir_unigram=True):
+# Palavras comuns do noticiário econômico/jurídico que, SOZINHAS, não definem
+# interesse nenhum. Foi assim que "recuperação" e "judicial" entraram no perfil
+# a partir da manchete das Casas Bahia e passaram a casar em "recuperação
+# econômica" e "decisão judicial". Como bigrama ("recuperação judicial") são
+# ótimas; como unigrama, são ruído.
+AMBIGUOS_SOZINHOS = {
+    "recuperação", "recuperacao", "judicial", "passivo", "ativo", "mercado",
+    "empresa", "empresas", "companhia", "companhias", "negócio", "negocio",
+    "negócios", "negocios", "setor", "setores", "governo", "federal", "estado",
+    "nacional", "brasil", "brasileiro", "brasileira", "bilhões", "bilhoes",
+    "milhões", "milhoes", "resultado", "resultados", "acordo", "decisão",
+    "decisao", "medida", "medidas", "projeto", "programa", "processo",
+    "operação", "operacao", "investimento", "investimentos", "receita",
+    "prejuízo", "prejuizo", "lucro", "capital", "valor", "preço", "preco",
+}
+
+
+def extrair_candidatos(titulo, ja_existentes, permitir_unigram=True,
+                       titulo_original=None):
     """
     Extrai termos candidatos de uma manchete.
-      - Bigrams: só quando AMBAS as palavras são de conteúdo (frase específica).
-      - Unigrams: só palavras de conteúdo com 6+ letras (evita ruído curto).
-    'permitir_unigram=False' força só bigrams — usado nas penalizações, para
-    nunca inserir termo único (que casaria como substring em notícias legítimas).
+
+      - Bigramas: quando AMBAS as palavras são de conteúdo. São a forma segura,
+        porque uma expressão de duas palavras é específica por construção.
+      - Unigramas: SÓ nomes próprios (capitalizados no meio da manchete, como
+        "Revolut" ou "Creditas") com 5+ letras. Uma palavra comum sozinha casa
+        em notícia legítima e polui o perfil — foi o que aconteceu com
+        "recuperação" e "judicial".
+
+    `permitir_unigram=False` força só bigramas (usado nas rejeições).
+    `titulo_original` preserva a capitalização, necessária para achar os nomes
+    próprios; sem ele, nenhum unigrama é extraído.
     """
     toks = re.findall(r"[a-zà-ú0-9&]+", titulo.lower())
     toks = [t for t in toks
             if t not in STOPWORDS and len(t) > 2 and not t.isdigit()]
     grams = []
-    for i in range(len(toks) - 1):                     # bigrams (preferidos)
+    for i in range(len(toks) - 1):                     # bigramas (preferidos)
         a, b = toks[i], toks[i + 1]
         if _eh_conteudo(a) and _eh_conteudo(b):
             grams.append(f"{a} {b}")
-    if permitir_unigram:                               # unigrams fortes
-        for t in toks:
-            if _eh_conteudo(t) and len(t) >= 6:
-                grams.append(t)
-    # descarta o que o perfil já reconhece (como substring)
+
+    if permitir_unigram and titulo_original:
+        # Nome próprio = capitalizado e NÃO na primeira posição (a primeira
+        # palavra é sempre maiúscula por ser início de frase).
+        brutos = re.findall(r"[A-Za-zÀ-ú0-9&]+", titulo_original)
+        for pos, tok in enumerate(brutos):
+            t = tok.lower()
+            if pos == 0 or len(tok) < 5:
+                continue
+            if not tok[0].isupper():
+                continue
+            if t in STOPWORDS or t in GENERICOS or t in WEB_BOILERPLATE:
+                continue
+            if t in AMBIGUOS_SOZINHOS or t.isdigit():
+                continue
+            grams.append(t)
+
+    # descarta o que o perfil já reconhece
     out = []
     for g in grams:
         if g in ja_existentes:
@@ -357,20 +445,30 @@ def analisar(perfil, gostei, nao):
             bem.append((m, score))
         else:
             novidades.append((m, score))
-            for c in extrair_candidatos(m, ja):
+            # titulo_original=m preserva a capitalização para achar nomes próprios
+            for c in extrair_candidatos(m, ja, titulo_original=m):
                 cand[c] += 1
     termos_novos = [t for t, _ in sorted(cand.items(), key=_salience,
                                          reverse=True)][:MAX_TERMOS_POR_RUN]
 
+    # ── Rejeições ────────────────────────────────────────────────────────────
+    # Só bigramas: um termo único de rejeição barraria notícia legítima.
     cand_neg = Counter()
     for m in nao:
         for c in extrair_candidatos(m, ja, permitir_unigram=False):
             cand_neg[c] += 1
-    termos_descarte = [t for t, _ in sorted(cand_neg.items(), key=_salience,
-                                            reverse=True)][:MAX_TERMOS_POR_RUN]
+
+    # Termo rejeitado MIN_REJEICOES_PARA_VETO+ vezes vira veto (zera a notícia);
+    # os demais viram penalização por peso.
+    termos_veto = [t for t, n in cand_neg.items() if n >= MIN_REJEICOES_PARA_VETO]
+    termos_descarte = [t for t, n in sorted(cand_neg.items(), key=_salience,
+                                            reverse=True)
+                       if t not in termos_veto][:MAX_TERMOS_POR_RUN]
 
     return {"bem": bem, "novidades": novidades,
-            "termos_novos": termos_novos, "termos_descarte": termos_descarte}
+            "termos_novos": termos_novos,
+            "termos_descarte": termos_descarte,
+            "termos_veto": termos_veto}
 
 
 def imprimir_resumo(gostei, nao, plano):
@@ -388,7 +486,12 @@ def imprimir_resumo(gostei, nao, plano):
         print(f"\n  ➖ Termos de descarte → '{PEN_DESCARTE}' (peso {PESO_DESCARTE}):")
         for t in plano["termos_descarte"]:
             print(f"       • {t}")
-    if not plano["termos_novos"] and not plano["termos_descarte"]:
+    if plano.get("termos_veto"):
+        print(f"\n  ⛔ VETOS (rejeitados {MIN_REJEICOES_PARA_VETO}+ vezes — zeram a notícia):")
+        for t in plano["termos_veto"]:
+            print(f"       • {t}")
+    if not plano["termos_novos"] and not plano["termos_descarte"] \
+            and not plano.get("termos_veto"):
         print("\n  ✅ Nada de novo a adicionar — o perfil já cobre bem essas manchetes.")
     print("=" * 60)
 
@@ -416,10 +519,17 @@ def aplicar(perfil, gostei, plano):
             perfil, PEN_DESCARTE,
             "Termos de assuntos que o Roberto marcou como indesejados.",
             PESO_DESCARTE)
+        pen["peso"] = PESO_DESCARTE          # atualiza peso se mudou
         existentes = {p.lower() for p in pen["palavras"]}
         for t in plano["termos_descarte"]:
             if t not in existentes:
                 pen["palavras"].append(t)
+
+    # Vetos: assunto rejeitado repetidamente zera a notícia, não importa o score
+    for t in plano.get("termos_veto", []):
+        vetos = perfil.setdefault("vetos", [])
+        if t not in {v.lower() for v in vetos}:
+            vetos.append(t)
 
     hist = perfil.setdefault("historico_exemplos", [])
     for m in gostei:

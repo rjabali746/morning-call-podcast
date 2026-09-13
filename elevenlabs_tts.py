@@ -20,10 +20,35 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 
 ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
 
-# Limite de chars por chamada API (ElevenLabs aceita até 5000)
-CHUNK_SIZE = 4500      # alvo por chunk — deixa folga para o rebalanceamento
-HARD_LIMIT = 4900      # teto absoluto aceito pela API
-MIN_CHUNK_SIZE = 600   # abaixo disso o modelo perde contexto e "gagueja"
+# ── Limite de caracteres por chamada, POR MODELO ──────────────────────────────
+# Fonte: https://elevenlabs.io/docs/overview/models  (seção "Character limits")
+# O código antigo assumia 5.000 para todo mundo e fatiava o episódio à toa.
+# No Flash cabem 40.000 — o episódio inteiro vai numa única requisição, o que
+# elimina de vez as emendas entre chunks (a origem do "pau" na narração).
+LIMITE_POR_MODELO = {
+    "eleven_flash_v2_5":      40000,
+    "eleven_flash_v2":        30000,
+    "eleven_turbo_v2_5":      40000,   # descontinuado — equivalente ao flash_v2_5
+    "eleven_turbo_v2":        30000,   # descontinuado — equivalente ao flash_v2
+    "eleven_multilingual_v2": 10000,
+    "eleven_multilingual_v1": 10000,
+    "eleven_v3":               5000,
+}
+LIMITE_PADRAO  = 5000   # modelo desconhecido → assume o limite mais restritivo
+MARGEM_LIMITE  = 0.95   # folga sobre o limite da API
+MIN_CHUNK_SIZE = 600    # abaixo disso o modelo perde contexto e "gagueja"
+
+def limite_do_modelo(model):
+    """Teto de caracteres por requisição para o modelo informado."""
+    return LIMITE_POR_MODELO.get(model, LIMITE_PADRAO)
+
+def chunk_size_para(model):
+    """Tamanho-alvo de chunk, com folga sobre o limite duro da API."""
+    return int(limite_do_modelo(model) * MARGEM_LIMITE)
+
+# Retrocompatibilidade para chamadas que não informam o modelo
+CHUNK_SIZE = int(LIMITE_PADRAO * MARGEM_LIMITE)
+HARD_LIMIT = LIMITE_PADRAO
 
 # Contexto passado ao TTS nas junções entre chunks. Melhora a prosódia na
 # emenda (entonação e ritmo continuam naturais) e NÃO é sintetizado nem
@@ -307,9 +332,13 @@ def limpar_texto_para_audio(texto):
     texto = _normalizar_para_fala(texto)
     return texto.strip()
 
-def dividir_em_chunks(texto, tamanho=CHUNK_SIZE):
+def dividir_em_chunks(texto, tamanho=None, model=None):
     """
     Divide o texto em chunks EQUILIBRADOS, respeitando parágrafos e frases.
+
+    Informe `model` para que o limite venha do modelo em uso — no Flash v2.5
+    cabem 40.000 caracteres por requisição, então o episódio inteiro costuma
+    sair em UMA chamada, sem emenda nenhuma.
 
     Por que equilibrado e não guloso: o preenchimento guloso (encher até o teto
     e jogar o resto no último chunk) costuma deixar um chunk final minúsculo.
@@ -318,6 +347,10 @@ def dividir_em_chunks(texto, tamanho=CHUNK_SIZE):
     o defeito relatado. Dividindo em partes de tamanho parecido, nenhum chunk
     fica curto o bastante para disparar esse comportamento.
     """
+    if tamanho is None:
+        tamanho = chunk_size_para(model) if model else CHUNK_SIZE
+    limite_duro = limite_do_modelo(model) if model else HARD_LIMIT
+
     if len(texto) <= tamanho:
         return [texto]
 
@@ -340,10 +373,10 @@ def dividir_em_chunks(texto, tamanho=CHUNK_SIZE):
                     # Frase que sozinha excede o limite duro da API (texto sem
                     # pontuação) precisa ser quebrada por palavras, senão a
                     # chamada volta HTTP 400 e o episódio inteiro falha.
-                    while len(frase) > HARD_LIMIT:
+                    while len(frase) > limite_duro:
                         fechar()
-                        corte = frase.rfind(" ", 0, HARD_LIMIT)
-                        corte = corte if corte > 0 else HARD_LIMIT
+                        corte = frase.rfind(" ", 0, limite_duro)
+                        corte = corte if corte > 0 else limite_duro
                         chunks.append(frase[:corte].strip())
                         frase = frase[corte:].lstrip()
                     if atual and len(atual) + len(frase) + 1 > alvo:
@@ -370,7 +403,7 @@ def dividir_em_chunks(texto, tamanho=CHUNK_SIZE):
     # Rede de segurança: chunk final curto demais é fundido no anterior
     # (desde que o resultado caiba no limite duro da API).
     while len(base) > 1 and len(base[-1]) < MIN_CHUNK_SIZE:
-        if len(base[-2]) + len(base[-1]) + 2 > HARD_LIMIT:
+        if len(base[-2]) + len(base[-1]) + 2 > limite_duro:
             break
         ultimo = base.pop()
         base[-1] = base[-1] + "\n\n" + ultimo

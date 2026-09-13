@@ -1,7 +1,7 @@
 {
   "_meta": {
     "versao": 2,
-    "ultima_atualizacao": "2026-08-18",
+    "ultima_atualizacao": "2026-09-13",
     "total_exemplos_analisados": 17,
     "contexto_profissional": "Empresa com forte atuação em crédito pessoa física e adquirência",
     "descricao": "Perfil de interesses do Roberto Jabali. Temas de peso 7 = core do negócio (crédito PF, adquirência, PME). Peso 5 = alto interesse pessoal/estratégico. Peso 4 = relevante mas secundário. Pesos menores = contexto de mercado.",
@@ -11,7 +11,8 @@
       "4": "Relevante e acompanha de perto",
       "3": "Contexto importante",
       "2": "Bom saber quando aparecer",
-      "-3": "Penalização — fora do escopo"
+      "-3": "Penalização — fora do escopo",
+      "veto": "Assunto vetado — zera a notícia independentemente do score"
     }
   },
   "temas": [
@@ -58,7 +59,15 @@
         "crédito imobiliário",
         "financiamento imobiliário",
         "fgts",
-        "saque-aniversário"
+        "saque-aniversário",
+        "concessão de crédito",
+        "concessao de credito",
+        "carteira de crédito",
+        "carteira de credito",
+        "oferta de crédito",
+        "originação de crédito",
+        "originacao de credito",
+        "tomador de crédito"
       ]
     },
     {
@@ -85,7 +94,6 @@
         "tap to phone",
         "nfc",
         "cielo",
-        "rede",
         "getnet",
         "infinitepay",
         "stone",
@@ -95,8 +103,6 @@
         "mercadopago",
         "subadquirente",
         "facilitador de pagamento",
-        "isv",
-        "iso",
         "agente de pagamento",
         "meios de pagamento",
         "meio de pagamento",
@@ -116,6 +122,11 @@
         "câmara de compensação",
         "chargeback",
         "contestação de transação"
+      ],
+      "palavras_contextuais": [
+        "rede",
+        "isv",
+        "iso"
       ]
     },
     {
@@ -147,7 +158,10 @@
         "empréstimo para empresa",
         "financiamento empresarial",
         "crédito produtivo",
-        "crédito para empreendedor"
+        "crédito para empreendedor",
+        "recuperação judicial",
+        "concessão para empresa",
+        "linha de crédito"
       ]
     },
     {
@@ -282,7 +296,6 @@
         "open banking",
         "drex",
         "real digital",
-        "pix",
         "sistema de pagamentos instantâneos",
         "regulação de crédito",
         "teto de juros",
@@ -292,10 +305,13 @@
         "sfn",
         "sandbox regulatório",
         "fintechs reguladas",
-        "ip",
         "instituição de pagamento",
         "scr",
-        "sistema de informações de crédito"
+        "sistema de informações de crédito",
+        "pix"
+      ],
+      "palavras_contextuais": [
+        "ip"
       ]
     },
     {
@@ -427,28 +443,15 @@
       "palavras": [
         "crédito sustentável",
         "esg",
-        "verde",
-        "sustentável",
         "emissão verde",
         "green bond",
         "finanças sustentáveis",
-        "taxonomia verde",
+        "taxonomia verde"
+      ],
+      "palavras_contextuais": [
+        "verde",
+        "sustentável",
         "carbono"
-      ]
-    },
-    {
-      "nome": "novos_interesses_a_revisar",
-      "descricao": "Termos aprendidos das manchetes favoritas — revisar e promover a temas definitivos.",
-      "peso": 2,
-      "palavras": [
-        "recuperação judicial",
-        "pede recuperação",
-        "judicial passivo",
-        "passivo bilhões",
-        "casas bahia",
-        "bahia pede",
-        "recuperação",
-        "judicial"
       ]
     }
   ],
@@ -474,7 +477,6 @@
       "descricao": "Concorrentes diretos de crédito PF, adquirência e banco digital",
       "lista": [
         "nubank",
-        "nu ",
         "nu bank",
         "nu holdings",
         "pagseguro",
@@ -487,7 +489,6 @@
         "stone",
         "stoneco",
         "cielo",
-        "rede ",
         "infinitepay",
         "getnet",
         "neon",
@@ -505,7 +506,6 @@
         "bradesco",
         "santander",
         "banco do brasil",
-        "bb ",
         "caixa econômica",
         "caixa economica",
         "btg",
@@ -533,7 +533,8 @@
         "cnc",
         "realize",
         "creditas",
-        "sumup"
+        "sumup",
+        "casas bahia"
       ]
     }
   },
@@ -648,7 +649,8 @@
     "Juros vão às máximas em mais de 1 ano após 'payroll'; mercado já vê chance majoritária de manutenção da Selic",
     "S&P rebaixa rating do BRB e diz que possíveis descompassos na capitalização podem elevar risco de liquidação",
     "Anthropic pede que laboratórios de IA considerem pausa no desenvolvimento e alerta que humanos podem perder o controle",
-    "https://valor.globo.com/financas/noticia/2026/08/17/mercado-pago-entra-no-crdito-consignado-privado.ghtml",
-    "https://valor.globo.com/empresas/noticia/2026/08/17/exclusivo-casas-bahia-pede-recuperacao-judicial-com-passivo-de-r-173-bilhoes.ghtml"
-  ]
+    "Mercado Pago entra no crédito consignado privado",
+    "Casas Bahia pede recuperação judicial com passivo de R$ 17,3 bilhões"
+  ],
+  "vetos": []
 }

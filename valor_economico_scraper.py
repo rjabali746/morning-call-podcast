@@ -13,7 +13,7 @@ Estratégia:
 """
 
 import os, json, time, sys, re, requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
 # Selenium (usado para artigos com paywall JavaScript)
@@ -36,11 +36,26 @@ except ImportError:
 CONFIG_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 COOKIE_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "valor_cookies.json")
 PERFIL_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perfil_interesses.json")
+POOL_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pool_reserva.json")
+
+# ── Pool de reserva ───────────────────────────────────────────────────────────
+# Notícias boas que foram raspadas mas não couberam no episódio do dia ficam
+# guardadas por alguns dias. Quando um dia rende pouca coisa relevante, o
+# episódio se completa com elas — em vez de raspar o fundo do tacho e narrar
+# alguma coisa "nada a ver" só para bater o mínimo.
+POOL_DIAS       = 3    # validade: notícia com mais de 3 dias sai do pool
+POOL_SCORE_MIN  = 10   # só guarda o que é claramente relevante
+POOL_MAX        = 40   # teto de itens guardados
 
 # ── Parâmetros de tempo e tamanho do podcast ──────────────────────────────────
 WPM_PODCAST      = 140   # palavras por minuto narradas em português (ElevenLabs)
-MAX_MIN_PODCAST  = 8     # duração máxima do episódio em minutos
-MAX_CHARS_RESUMO = 1300  # caracteres máx por resumo de notícia (~215 palavras)
+MAX_MIN_PODCAST  = 10    # duração máxima do episódio em minutos
+MAX_CHARS_RESUMO = 1300  # caracteres máx por resumo de notícia (texto bruto)
+
+# Caracteres (normalizados) por palavra falada — usado para estimar duração a
+# partir do tamanho real do texto. Medir pelas palavras do texto BRUTO
+# subestimava a duração, porque números viram muitas palavras ao ir por extenso.
+_CHARS_POR_PALAVRA = 6.5
 
 # PISO de notícias por episódio. Garantido mesmo que o score fique abaixo do
 # limiar ou que os tetos de tempo/caracteres sejam atingidos — um episódio com
@@ -48,16 +63,17 @@ MAX_CHARS_RESUMO = 1300  # caracteres máx por resumo de notícia (~215 palavras
 MIN_NOTICIAS_EPISODIO = 3
 
 # Teto RÍGIDO de caracteres JÁ NORMALIZADOS enviados ao TTS por episódio — é o
-# que efetivamente consome quota. Com o modelo turbo_v2_5 cada caractere custa
-# METADE de um crédito:
-#   7000 chars × 0,5 = 3500 créditos/episódio × 22 dias úteis ≈ 77k créditos/mês
-# Folgado dentro do plano Creator (100k) mesmo em meses com 23 dias úteis.
-MAX_CHARS_EPISODIO = 7000
+# que efetivamente consome quota. Com Flash v2.5 cada caractere custa METADE de
+# um crédito, e o plano Creator dá 121.000 créditos/mês:
+#   9000 chars × 0,5 = 4.500 créditos/episódio
+#   4.500 × 22 dias úteis = 99.000 créditos/mês  →  82% do plano  ✓
+# Os 18% de folga cobrem meses com 23 dias úteis e reexecuções por falha.
+MAX_CHARS_EPISODIO = 9000
 
-# Teto por notícia, também medido JÁ NORMALIZADO. Dimensionado para que o piso
-# de 3 notícias caiba no teto do episódio mesmo no pior caso (matéria saturada
-# de números):  250 (intro/outro) + 3 × (2100 + 45) = 6685 chars  ✓
-MAX_CHARS_TTS_RESUMO = 2100
+# Teto por notícia, também medido JÁ NORMALIZADO. Dimensionado para caber
+# 5 notícias no episódio:  250 (intro/outro) + 5 × (1600 + 135) = 8.925 chars ✓
+# (135 = overhead de rótulo/título). Com o piso de 3, sobra folga de sobra.
+MAX_CHARS_TTS_RESUMO = 1600
 
 # Estimativas fixas usadas no cálculo dos tetos
 _PALAVRAS_INTRO_OUTRO   = 45    # palavras de intro + outro (abertura enxuta)
@@ -137,6 +153,64 @@ PALAVRAS_CHAVE = [
 
 _perfil_cache = None
 
+# ── Casamento de termos por PALAVRA INTEIRA ───────────────────────────────────
+# O código antigo usava `palavra in texto`, casamento por substring. Isso fazia
+# o filtro disparar em lugares absurdos:
+#     "ip"   casava em part[ip]ação, princ[íp]io, equ[ip]e
+#     "fed"  casava em [fed]eral, con[fed]eração
+#     "iso"  casava em [iso]lamento, prov[isó]rio
+#     "rede" casava em pa[rede], ap[rende]
+# Uma manchete como "Governo federal amplia rede de atendimento" tirava 16
+# pontos — mais que muita notícia legítima de crédito. Daí as notícias
+# "nada a ver". Com fronteira de palavra, só casa o termo de verdade.
+_PADRAO_CACHE = {}
+
+def _fragmento_flexivel(palavra):
+    """
+    Regex de UMA palavra, tolerante a plural em pt-BR.
+
+    Sem isso, exigir palavra inteira criaria um problema novo: o perfil tem
+    "adquirente" mas a manchete diz "adquirentes"; tem "microcrédito" mas a
+    manchete diz "microcréditos". O filtro passaria a descartar notícia boa —
+    e pior, no portão eh_relevante(), antes mesmo de pontuar.
+    """
+    w = re.escape(palavra)
+    if len(palavra) < 3:
+        return w                                   # "ip", "bb": sem flexão
+    if palavra.endswith("ão"):                     # cartão → cartões
+        return re.escape(palavra[:-2]) + r"(?:ão|ões|ãos|ães)"
+    if palavra.endswith("s"):                      # juros, recebíveis: invariante
+        return w
+    if palavra.endswith("l"):                      # digital → digitais
+        return r"(?:" + w + r"|" + re.escape(palavra[:-1]) + r"is)"
+    if palavra.endswith("m"):                      # bem → bens
+        return r"(?:" + w + r"|" + re.escape(palavra[:-1]) + r"ns)"
+    if palavra.endswith(("r", "z")):               # mulher → mulheres
+        return w + r"(?:es)?"
+    return w + r"s?"                               # caso geral
+
+
+def casa_termo(palavra, texto):
+    """
+    True se `palavra` aparece em `texto` como termo inteiro (não substring),
+    aceitando a forma plural.
+
+    O casamento por substring era a maior fonte de falso positivo — mas trocar
+    por igualdade exata criaria falsos negativos nos plurais. As duas coisas
+    juntas: fronteira de palavra + flexão de número.
+    """
+    p = (palavra or "").strip().lower()
+    if not p:
+        return False
+    padrao = _PADRAO_CACHE.get(p)
+    if padrao is None:
+        corpo = r"\s+".join(_fragmento_flexivel(w) for w in p.split())
+        # (?<!\w) e (?!\w) em vez de \b: funcionam também com termos que
+        # começam/terminam em símbolo, como "s&p" e "m&a".
+        padrao = re.compile(r"(?<!\w)" + corpo + r"(?!\w)")
+        _PADRAO_CACHE[p] = padrao
+    return bool(padrao.search(texto))
+
 def carregar_perfil():
     """Carrega o perfil de interesses personalizado do Roberto."""
     global _perfil_cache
@@ -207,14 +281,23 @@ def calcular_score_perfil(noticia, perfil):
     detalhes = []
 
     if not perfil:
-        return sum(1 for p in PALAVRAS_CHAVE if p in texto), []
+        return sum(1 for p in PALAVRAS_CHAVE if casa_termo(p, texto)), []
 
     # ── Pontuação por tema ────────────────────────────────────────────────────
     for tema in perfil.get("temas", []):
         nome     = tema.get("nome", "?")
         peso     = tema.get("peso", 1)
         palavras = tema.get("palavras", [])
-        matches  = [p for p in palavras if p.lower() in texto]
+        matches  = [p for p in palavras if casa_termo(p, texto)]
+
+        # Termos ambíguos: só valem se o tema já foi ancorado por um termo
+        # inequívoco. "rede" é adquirente, mas também é "rede elétrica" e
+        # "rede de atendimento" — só conta se vier junto de maquininha, MDR etc.
+        if matches:
+            contextuais = [p for p in tema.get("palavras_contextuais", [])
+                           if casa_termo(p, texto)]
+            matches += contextuais
+
         if matches:
             contribuicao = peso * min(len(matches), 2)  # cap: 2 hits por tema
             score += contribuicao
@@ -231,7 +314,7 @@ def calcular_score_perfil(noticia, perfil):
         tier = entidades_cfg.get(tier_key, {})
         bonus_cfg = tier.get("bonus", tier_bonus)
         for entidade in tier.get("lista", []):
-            if entidade.lower() in texto:
+            if casa_termo(entidade, texto):
                 score += bonus_cfg
                 detalhes.append(f"{tier_key}(+{bonus_cfg}:{entidade.strip()})")
 
@@ -239,10 +322,20 @@ def calcular_score_perfil(noticia, perfil):
     for pen in perfil.get("penalizacoes", []):
         peso_pen = pen.get("peso", -2)
         for palavra in pen.get("palavras", []):
-            if palavra.lower() in texto:
+            if casa_termo(palavra, texto):
                 score += peso_pen
                 detalhes.append(f"penalidade({peso_pen}:{palavra})")
                 break
+
+    # ── Vetos ─────────────────────────────────────────────────────────────────
+    # Assunto vetado zera a notícia, por mais pontos que ela tenha acumulado.
+    # Serve para casos em que a penalização por peso não basta — uma matéria de
+    # política ou esporte que cite "Itaú" de passagem não deve entrar por causa
+    # do bônus de entidade.
+    for palavra in perfil.get("vetos", []):
+        if casa_termo(palavra, texto):
+            detalhes.append(f"VETO({palavra})")
+            return -99, detalhes
 
     return score, detalhes
 
@@ -279,14 +372,14 @@ def eh_relevante(texto):
     Usa palavras-chave base + todas as palavras do perfil personalizado.
     """
     t = texto.lower()
-    # 1. Palavras-chave base
-    if any(p in t for p in PALAVRAS_CHAVE):
+    # 1. Palavras-chave base (casamento por palavra inteira)
+    if any(casa_termo(p, t) for p in PALAVRAS_CHAVE):
         return True
     # 2. Palavras do perfil personalizado (se disponível)
     perfil = carregar_perfil()
     if perfil:
         for palavra in _todas_palavras_perfil(perfil):
-            if palavra in t:
+            if casa_termo(palavra, t):
                 return True
     return False
 
@@ -562,9 +655,121 @@ def buscar_noticias(session):
 # SELEÇÃO POR TEMPO
 # ============================================================================
 
+def carregar_pool():
+    """Lê o pool de reserva, já descartando o que passou da validade."""
+    if not os.path.exists(POOL_FILE):
+        return []
+    try:
+        with open(POOL_FILE, encoding="utf-8") as f:
+            pool = json.load(f)
+    except Exception:
+        return []
+    limite = (datetime.now() - timedelta(days=POOL_DIAS)).isoformat()
+    vivos  = [n for n in pool if n.get("_guardado_em", "") >= limite]
+    if len(pool) != len(vivos):
+        print(f"  🗑️  Pool: {len(pool) - len(vivos)} notícia(s) vencida(s) descartada(s)")
+    return vivos
+
+
+def salvar_pool(pool_antigo, candidatas, usadas_links):
+    """
+    Atualiza o pool: remove o que foi narrado, acrescenta as boas que sobraram.
+
+    Guarda só o essencial (título, link, score e um trecho do conteúdo), para o
+    arquivo não crescer sem controle.
+    """
+    agora  = datetime.now().isoformat()
+    vistos = set(usadas_links)
+    novo   = []
+
+    for n in pool_antigo:                      # mantém o que ainda não foi usado
+        if n.get("link") in vistos:
+            continue
+        vistos.add(n.get("link"))
+        novo.append(n)
+
+    for n in candidatas:                       # acrescenta as boas de hoje
+        link = n.get("link")
+        if not link or link in vistos:
+            continue
+        if n.get("score_relevancia", 0) < POOL_SCORE_MIN:
+            continue
+        vistos.add(link)
+        conteudo = (n.get("conteudo_completo") or n.get("resumo") or "")
+        novo.append({
+            "titulo": n.get("titulo", ""),
+            "link": link,
+            "score_relevancia": n.get("score_relevancia", 0),
+            "conteudo_completo": conteudo[:MAX_CHARS_RESUMO * 2],
+            "_guardado_em": n.get("_guardado_em", agora),
+        })
+
+    novo.sort(key=lambda x: x.get("score_relevancia", 0), reverse=True)
+    novo = novo[:POOL_MAX]
+    try:
+        with open(POOL_FILE, "w", encoding="utf-8") as f:
+            json.dump(novo, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"  ⚠️  Não consegui salvar o pool: {e}")
+    return novo
+
+
+def selecionar_com_resgate(noticias, pool=None, min_noticias=MIN_NOTICIAS_EPISODIO,
+                           **kwargs):
+    """
+    Monta o episódio em três camadas, da melhor para a pior:
+
+      1. Notícias de hoje que passam no critério de relevância (score ≥ limiar).
+      2. Se faltou para o mínimo, RESGATA as de maior score dos últimos dias
+         que ainda não foram narradas — conteúdo bom que não coube antes.
+      3. Só se ainda faltar, aceita as fracas de hoje.
+
+    Assim o episódio mantém o tamanho sem nunca precisar narrar algo irrelevante
+    enquanto houver notícia boa guardada.
+    """
+    selecionadas = selecionar_por_tempo(noticias, min_noticias=0, **kwargs)
+    escolhidos   = {n.get("link") for n in selecionadas}
+
+    # ── Camada 2: resgate do pool ────────────────────────────────────────────
+    resgatadas = []
+    if len(selecionadas) < min_noticias and pool:
+        reserva = sorted((n for n in pool if n.get("link") not in escolhidos),
+                         key=lambda x: x.get("score_relevancia", 0), reverse=True)
+        for n in reserva:
+            if len(selecionadas) >= min_noticias:
+                break
+            selecionadas.append(n)
+            escolhidos.add(n.get("link"))
+            resgatadas.append(n)
+        if resgatadas:
+            print(f"\n  ♻️  {len(resgatadas)} notícia(s) resgatada(s) do pool de reserva:")
+            for n in resgatadas:
+                dia = (n.get("_guardado_em", "")[:10] or "?")
+                print(f"       • [{n.get('score_relevancia','?'):>3}pts] ({dia}) {n.get('titulo','')[:58]}")
+
+    # ── Camada 3: último recurso — as fracas de hoje ─────────────────────────
+    if len(selecionadas) < min_noticias:
+        sobras = [n for n in noticias if n.get("link") not in escolhidos]
+        sobras.sort(key=lambda x: x.get("score_relevancia", 0), reverse=True)
+        faltam = min_noticias - len(selecionadas)
+        if sobras:
+            print(f"\n  ⚠️  Pool vazio — completando com {min(faltam, len(sobras))} "
+                  f"notícia(s) de score baixo para bater o mínimo de {min_noticias}:")
+        for n in sobras[:faltam]:
+            print(f"       • [{n.get('score_relevancia','?'):>3}pts] {n.get('titulo','')[:58]}")
+            selecionadas.append(n)
+            escolhidos.add(n.get("link"))
+
+    if len(selecionadas) < min_noticias:
+        print(f"\n  ⚠️  Só foi possível montar {len(selecionadas)} notícia(s) "
+              f"(mínimo desejado: {min_noticias}).")
+
+    return selecionadas
+
+
 def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST,
                          min_score=6, max_chars=MAX_CHARS_EPISODIO,
-                         min_noticias=MIN_NOTICIAS_EPISODIO):
+                         min_noticias=0):
     """
     Seleciona notícias enriquecidas em ordem de score, respeitando os tetos de
     tempo e de caracteres — mas SEMPRE entregando pelo menos `min_noticias`.
@@ -601,10 +806,11 @@ def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST,
                                   max_chars_tts=MAX_CHARS_TTS_RESUMO)
         titulo   = n.get("titulo", "")
 
-        palavras_noticia = len(titulo.split()) + 5 + len(resumo.split())
         # Mede o custo REAL no TTS (números por extenso inflam bastante o texto)
         chars_noticia    = (chars_no_tts(titulo) + chars_no_tts(resumo)
                             + _CHARS_OVERHEAD_NOTICIA)
+        # Duração estimada a partir dos chars normalizados, não do texto bruto
+        palavras_noticia = chars_noticia / _CHARS_POR_PALAVRA
 
         # ── Piso rígido: as primeiras `min_noticias` entram sempre ────────────
         if len(selecionadas) < min_noticias:
@@ -644,7 +850,7 @@ def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST,
     print(f"\n  ⏱️  Seleção: {len(selecionadas)} notícias selecionadas"
           f"  (min_score={min_score}, tetos: {max_min}min / {max_chars} chars)")
     print(f"       Duração estimada: ~{tempo_str}"
-          f"  ({palavras_usadas} palavras @ {wpm} wpm)")
+          f"  ({int(palavras_usadas)} palavras @ {wpm} wpm)")
     print(f"       Quota estimada: ~{chars_usados} chars"
           f"  (teto {max_chars} — controle de créditos ElevenLabs)")
     if parou_por_chars:
@@ -925,9 +1131,9 @@ def formatar_para_podcast(noticias):
     """
     Gera o roteiro narrado do episódio.
 
-    Recebe a lista de notícias JÁ selecionadas por selecionar_por_tempo(),
-    que garante o piso de MIN_NOTICIAS_EPISODIO e respeita os tetos de
-    tempo e de quota.
+    Recebe a lista de notícias JÁ selecionadas por selecionar_com_resgate(),
+    que garante o piso de MIN_NOTICIAS_EPISODIO (resgatando do pool quando o
+    dia rende pouco) e respeita os tetos de tempo e de quota.
 
     Abertura enxuta, sem cabeçalho de data. Nenhum dígito no roteiro:
     numerais vão por extenso para não travar a narração.
@@ -1041,7 +1247,8 @@ def main():
     print(f"\n💾 JSON: {json_file}")
 
     # Salvar texto do podcast
-    texto = formatar_para_podcast(selecionar_por_tempo(noticias[:10]))
+    texto = formatar_para_podcast(
+        selecionar_com_resgate(noticias[:10], pool=carregar_pool()))
     txt_file = os.path.join(base, f"texto_episodio_{ts}.txt")
     with open(txt_file, "w", encoding="utf-8") as f:
         f.write(texto)

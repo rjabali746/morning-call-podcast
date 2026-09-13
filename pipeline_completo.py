@@ -67,10 +67,12 @@ def load_config() -> dict:
                 # 'or default' — se o secret não existir, o Actions injeta string
                 # vazia; o 'or' garante o fallback em vez de mandar valor vazio.
                 "voice_id": os.environ.get("ELEVENLABS_VOICE_ID") or "onwK4e9ZLuTAKqWW03F9",
-                # Turbo v2.5 consome METADE da quota por caractere vs. multilingual_v2,
-                # com qualidade pt-BR muito próxima. Pode ser sobrescrito pelo
-                # secret ELEVENLABS_MODEL (ex.: "eleven_multilingual_v2") sem editar código.
-                "model":    os.environ.get("ELEVENLABS_MODEL") or "eleven_turbo_v2_5",
+                # Flash v2.5 consome METADE da quota por caractere vs. multilingual_v2
+                # e aceita 40.000 chars por requisição — o episódio inteiro cabe numa
+                # única chamada, sem emendas. Substitui o turbo_v2_5, que a ElevenLabs
+                # descontinuou ("recomendamos Flash em vez de Turbo em todos os casos").
+                # Sobrescrevível pelo secret ELEVENLABS_MODEL sem editar código.
+                "model":    os.environ.get("ELEVENLABS_MODEL") or "eleven_flash_v2_5",
                 # Reforça o idioma nos modelos turbo/flash (o multilingual ignora).
                 "language_code": os.environ.get("ELEVENLABS_LANGUAGE_CODE") or "pt",
             },
@@ -95,10 +97,17 @@ def load_config() -> dict:
     raise RuntimeError("Nenhuma configuração encontrada (env vars ou config.json)")
 
 
+#   used_articles.json — artigos já narrados (deduplicação)
+#   pool_reserva.json  — notícias boas guardadas para os dias magros
+# Ambos são estado que precisa sobreviver entre execuções. O runner do Actions
+# começa limpo a cada corrida, então buscamos do repositório na API.
+ARQUIVOS_DE_ESTADO = ["used_articles.json", "pool_reserva.json"]
+
+
 def baixar_historico_do_github(config: dict):
     """
-    Baixa used_articles.json diretamente da API do GitHub.
-    Garante que a deduplicação funciona independente do estado do checkout.
+    Baixa os arquivos de estado direto da API do GitHub.
+    Garante que a deduplicação e o pool funcionam independente do checkout.
     """
     import requests as req
     import base64 as b64
@@ -111,23 +120,27 @@ def baixar_historico_do_github(config: dict):
     if not token:
         return
 
-    url     = f"https://api.github.com/repos/{usuario}/{repo}/contents/used_articles.json"
     headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
 
-    try:
-        r = req.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            content = b64.b64decode(r.json()["content"]).decode("utf-8")
-            with open(BASE / "used_articles.json", "w", encoding="utf-8") as f:
-                f.write(content)
-            n = len(json.loads(content))
-            log.info(f"  📥 Histórico baixado do GitHub: {n} artigos já usados")
-        elif r.status_code == 404:
-            log.info("  📥 Histórico ainda não existe — primeiro episódio")
-        else:
-            log.warning(f"  ⚠️  Não foi possível baixar histórico: HTTP {r.status_code}")
-    except Exception as e:
-        log.warning(f"  ⚠️  Erro ao baixar histórico: {e}")
+    for nome in ARQUIVOS_DE_ESTADO:
+        url = f"https://api.github.com/repos/{usuario}/{repo}/contents/{nome}"
+        try:
+            r = req.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                content = b64.b64decode(r.json()["content"]).decode("utf-8")
+                with open(BASE / nome, "w", encoding="utf-8") as f:
+                    f.write(content)
+                try:
+                    n = len(json.loads(content))
+                except Exception:
+                    n = "?"
+                log.info(f"  📥 {nome}: {n} item(ns) baixado(s)")
+            elif r.status_code == 404:
+                log.info(f"  📥 {nome} ainda não existe — será criado")
+            else:
+                log.warning(f"  ⚠️  {nome}: HTTP {r.status_code}")
+        except Exception as e:
+            log.warning(f"  ⚠️  Erro ao baixar {nome}: {e}")
 
 
 def preparar_cookies():
@@ -196,7 +209,9 @@ def etapa_scraping() -> str:
     from valor_economico_scraper import (
         buscar_noticias,
         enriquecer_artigos,
-        selecionar_por_tempo,
+        selecionar_com_resgate,
+        carregar_pool,
+        salvar_pool,
         formatar_para_podcast,
         HEADERS,
     )
@@ -215,10 +230,12 @@ def etapa_scraping() -> str:
     # ── Carregar URLs já usadas em episódios anteriores ──────────────────────
     used_file = BASE / "used_articles.json"
     used_urls = set()
+    used_ordenados = []
     if used_file.exists():
         try:
             with open(used_file) as f:
-                used_urls = set(json.load(f))
+                used_ordenados = json.load(f)
+            used_urls = set(used_ordenados)
             log.info(f"  📚 {len(used_urls)} artigos já usados em episódios anteriores")
         except Exception:
             pass
@@ -236,28 +253,36 @@ def etapa_scraping() -> str:
         log.warning("  ⚠️  Todos os artigos já foram usados — incluindo os mais recentes mesmo assim")
         noticias_novas = noticias[:10]
 
-    # Salvar TODOS os artigos encontrados neste scrape (não só os top 5).
-    # Isso garante que artigos rankeados abaixo de top-5 também sejam marcados
-    # como "usados" e não apareçam em episódios futuros — conteúdo sempre novo.
-    todas_used = list(used_urls | {n["link"] for n in noticias if n.get("link")})
-    todas_used = todas_used[-200:]  # histórico de ~40 dias
-    with open(used_file, "w", encoding="utf-8") as f:
-        json.dump(todas_used, f, ensure_ascii=False, indent=2)
-    log.info(f"  💾 Histórico atualizado: {len(todas_used)} artigos no total")
-
     noticias = noticias_novas
 
     # Enriquecer até top 10 candidatos com conteúdo completo via Selenium
     noticias = enriquecer_artigos(session, noticias, top=10, cookies_list=cookies_list)
 
+    # Selecionar entre os artigos enriquecidos (top 10). Artigos além do top-10
+    # não têm conteúdo completo e distorceriam a estimativa de duração.
+    log.info("  ⏱️  Selecionando notícias (relevância → resgate do pool → último recurso)...")
+    pool = carregar_pool()
+    if pool:
+        log.info(f"  ♻️  Pool de reserva: {len(pool)} notícia(s) guardada(s)")
+    noticias_selecionadas = selecionar_com_resgate(noticias[:10], pool=pool)
+    log.info(f"  🎙️  {len(noticias_selecionadas)} notícias selecionadas para o episódio")
+
+    # ── Histórico: marcar como usadas SÓ as que entraram no episódio ─────────
+    # Antes, todo artigo raspado virava "usado", mesmo sem ser narrado — o que
+    # queimava conteúdo bom e deixava os dias fracos sem nada para resgatar.
+    narradas = [n["link"] for n in noticias_selecionadas if n.get("link")]
+    # Ordem importa: o corte em 200 tem que descartar os MAIS ANTIGOS. Um set
+    # não tem ordem, então o corte removia links ao acaso — e um artigo já
+    # narrado podia sumir do histórico e ser narrado de novo dias depois.
+    anteriores = [u for u in used_ordenados if u not in set(narradas)]
+    todas_used = (anteriores + narradas)[-200:]   # histórico de ~40 dias
     with open(used_file, "w", encoding="utf-8") as f:
         json.dump(todas_used, f, ensure_ascii=False, indent=2)
+    log.info(f"  💾 Histórico: {len(narradas)} narrada(s) hoje, {len(todas_used)} no total")
 
-    # Selecionar por tempo apenas entre os artigos enriquecidos (top 10).
-    # Artigos além do top-10 não têm conteúdo completo e distorceriam a estimativa.
-    log.info("  ⏱️  Selecionando notícias por tempo (máx 10 min, min score 6, top-5 conteúdo completo)...")
-    noticias_selecionadas = selecionar_por_tempo(noticias[:10])
-    log.info(f"  🎙️  {len(noticias_selecionadas)} notícias selecionadas para o episódio")
+    # ── Pool: guardar as boas que sobraram para os dias magros ───────────────
+    pool_novo = salvar_pool(pool, noticias[:10], narradas)
+    log.info(f"  ♻️  Pool de reserva agora com {len(pool_novo)} notícia(s)")
 
     ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -309,14 +334,19 @@ def etapa_tts(txt_path: str, config: dict) -> str:
             f"Saldo insuficiente: {n_chars} chars necessários, {restante} disponíveis"
         )
 
-    chunks    = dividir_em_chunks(texto)
+    # O limite por requisição vem do modelo: no Flash v2.5 são 40.000 chars,
+    # então o episódio inteiro sai em UMA chamada — sem emenda para dar errado.
+    chunks    = dividir_em_chunks(texto, model=model)
     audio_dir = BASE / "audio"
     audio_dir.mkdir(exist_ok=True)
     ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
     mp3_path  = audio_dir / f"podcast_{ts}.mp3"
 
-    log.info(f"  ✂️  {len(chunks)} chunk(s): "
-             + ", ".join(f"{len(c):,}" for c in chunks) + " chars")
+    if len(chunks) == 1:
+        log.info(f"  ✅ Episódio inteiro em 1 requisição ({len(texto):,} chars) — sem emendas")
+    else:
+        log.info(f"  ✂️  {len(chunks)} chunk(s): "
+                 + ", ".join(f"{len(c):,}" for c in chunks) + " chars")
 
     audio_bytes = b""
     for i, chunk in enumerate(chunks):
@@ -450,14 +480,16 @@ def etapa_publicacao(mp3_path: str, config: dict):
     with open(BASE / "feed.xml", "w", encoding="utf-8") as f:
         f.write(feed_xml)
 
-    # Salvar histórico de artigos usados (evita repetição nos próximos episódios)
-    used_file = BASE / "used_articles.json"
-    if used_file.exists():
-        gh.upload_arquivo(
-            caminho_local   = str(used_file),
-            caminho_repo    = "used_articles.json",
-            mensagem_commit = f"📝 Histórico de artigos — {titulo_ep}",
-        )
+    # Persistir o estado entre execuções: histórico de artigos narrados
+    # (evita repetição) e pool de reserva (alimenta os dias magros).
+    for nome in ARQUIVOS_DE_ESTADO:
+        caminho = BASE / nome
+        if caminho.exists():
+            gh.upload_arquivo(
+                caminho_local   = str(caminho),
+                caminho_repo    = nome,
+                mensagem_commit = f"📝 {nome} — {titulo_ep}",
+            )
 
     log.info(f"  ✅ Publicado!")
     log.info(f"     🔊 {pages_url}/audio/{nome_mp3}")
@@ -499,11 +531,29 @@ def main():
         # que aplica o piso de 3 notícias e os tetos de tempo/quota. Formatar
         # direto os 10 artigos estouraria a quota do ElevenLabs.
         from valor_economico_scraper import (
-            formatar_para_podcast, selecionar_por_tempo,
+            formatar_para_podcast, selecionar_com_resgate,
+            carregar_pool, salvar_pool,
         )
-        sel_fb   = selecionar_por_tempo(noticias_fb[:10])
+        pool_fb  = carregar_pool()
+        sel_fb   = selecionar_com_resgate(noticias_fb[:10], pool=pool_fb)
         log.info(f"  🎙️  {len(sel_fb)} notícias selecionadas (fallback)")
         texto    = formatar_para_podcast(sel_fb)
+
+        # Mesmo no fallback o estado precisa ser atualizado: sem isso, uma
+        # notícia resgatada continuaria no pool e seria narrada de novo.
+        narradas_fb = [n["link"] for n in sel_fb if n.get("link")]
+        used_file   = BASE / "used_articles.json"
+        antes_fb    = []
+        if used_file.exists():
+            try:
+                with open(used_file) as f:
+                    antes_fb = json.load(f)
+            except Exception:
+                antes_fb = []
+        restante = [u for u in antes_fb if u not in set(narradas_fb)]
+        with open(used_file, "w", encoding="utf-8") as f:
+            json.dump((restante + narradas_fb)[-200:], f, ensure_ascii=False, indent=2)
+        salvar_pool(pool_fb, noticias_fb[:10], narradas_fb)
         ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
         txt_path = str(BASE / f"texto_episodio_{ts}.txt")
         with open(txt_path, "w", encoding="utf-8") as f:
