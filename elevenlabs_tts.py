@@ -122,9 +122,28 @@ PRONUNCIA = {
     "ETF":   "E T F",
     "IPO":   "I P O",
     "M&A":   "fusões e aquisições",
-    "p.p.":  "pontos percentuais",
-    "bps":   "pontos-base",
 }
+
+# Ordinais por extenso. A tabela antiga parava no décimo, então "13ª Câmara"
+# virava "trezeª" — com o glifo ª indo cru para o TTS.
+_ORD_UNI  = ["", "primeir", "segund", "terceir", "quart", "quint",
+             "sext", "sétim", "oitav", "non"]
+_ORD_DEZ  = ["", "décim", "vigésim", "trigésim", "quadragésim", "quinquagésim",
+             "sexagésim", "septuagésim", "octogésim", "nonagésim"]
+_ORD_CEM  = ["", "centésim", "ducentésim", "tricentésim", "quadringentésim",
+             "quingentésim", "sexcentésim", "septingentésim", "octingentésim",
+             "noningentésim"]
+
+def _ordinal_por_extenso(n, feminino=False):
+    """Ordinal em pt-BR até 999 ('13ª' → 'décima terceira')."""
+    n = int(n)
+    if n <= 0 or n > 999:
+        return None
+    suf = "a" if feminino else "o"
+    c, r = divmod(n, 100)
+    d, u = divmod(r, 10)
+    partes = [t + suf for t in (_ORD_CEM[c], _ORD_DEZ[d], _ORD_UNI[u]) if t]
+    return " ".join(partes)
 
 # ── Números por extenso (pt-BR) ───────────────────────────────────────────────
 # CAUSA RAIZ dos "travamentos" da narração: o ElevenLabs decide sozinho como ler
@@ -252,13 +271,24 @@ def _normalizar_para_fala(texto):
     abreviações financeiras (bi/mi/tri), datas numéricas, percentuais com
     sinal, horários com dois-pontos e ordinais.
     """
+    # 0. Abreviações com ponto, ANTES de tudo. "p.p." termina em ponto, que
+    #    pode ser também o ponto final da frase — expandir sem cuidado colava
+    #    duas frases numa só e apagava a pausa da narração.
+    texto = re.sub(r"(?<!\w)p\.\s?p\.(?=\s+[A-ZÀ-Ú])", "pontos percentuais.", texto)
+    texto = re.sub(r"(?<!\w)p\.\s?p\.(?!\w)",           "pontos percentuais",  texto)
+    texto = re.sub(r"(?<!\w)bps(?!\w)",                 "pontos-base",         texto)
+
     # 1. Datas numéricas: 18/07/2026 → '18 de julho de 2026'; 18/07 → '18 de julho'
+    #    Dia e mês são validados (1-31 / 01-12) para a regra não disparar em
+    #    razões e proporções — "safra 21/22", "carteira 60/40", "12/24 parcelas"
+    #    viravam "vinte e um DE vinte e dois".
     def _data(m):
         dia = str(int(m.group(1)))
-        mes = _MESES_PT.get(m.group(2), m.group(2))
+        mes = _MESES_PT.get(m.group(2).zfill(2), m.group(2))
         ano = m.group(3)
         return f"{dia} de {mes}" + (f" de {ano}" if ano else "")
-    texto = re.sub(r"\b(\d{1,2})/(\d{2})(?:/(\d{4}))?\b", _data, texto)
+    texto = re.sub(r"(?<!\w)(0?[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])"
+                   r"(?:/(\d{4}))?(?!\w)", _data, texto)
 
     # 2. Separador de milhar (ponto): 1.234.567 → 1234567
     texto = re.sub(r"\d{1,3}(?:\.\d{3})+",
@@ -287,16 +317,11 @@ def _normalizar_para_fala(texto):
     texto = re.sub(r"\b(\d{1,2})h\b",         r"\1 horas",      texto)
     texto = re.sub(r"\b(\d{1,2}):(\d{2})\b",  r"\1 horas e \2", texto)
 
-    # 7. Ordinais: 1º → primeiro, 2ª → segunda (até 10º/10ª)
-    _ORD_M = ["","primeiro","segundo","terceiro","quarto","quinto",
-               "sexto","sétimo","oitavo","nono","décimo"]
-    _ORD_F = ["","primeira","segunda","terceira","quarta","quinta",
-               "sexta","sétima","oitava","nona","décima"]
+    # 7. Ordinais: 1º → primeiro, 13ª → décima terceira (até 999)
     def _ordinal(m):
-        n = int(m.group(1))
-        lst = _ORD_F if m.group(2) == "ª" else _ORD_M
-        return lst[n] if 1 <= n < len(lst) else m.group(0)
-    texto = re.sub(r"\b(\d+)([ºª])\b", _ordinal, texto)
+        ext = _ordinal_por_extenso(m.group(1), feminino=(m.group(2) == "ª"))
+        return ext if ext else m.group(0)
+    texto = re.sub(r"(?<!\w)(\d+)\s*([ºª°])", _ordinal, texto)
 
     # 8. Sinais colados a números → palavra
     texto = re.sub(r"(?<!\w)\+(?=\d)", "mais ",  texto)
@@ -308,9 +333,16 @@ def _normalizar_para_fala(texto):
         lambda m: f"{num_por_extenso(m.group(1))} vírgula {_decimal_por_extenso(m.group(2))}",
         texto)
 
-    # 10. Inteiros restantes por extenso — depois deste passo NÃO sobra
-    #     nenhum dígito no texto enviado ao TTS.
-    texto = re.sub(r"\d+", lambda m: num_por_extenso(m.group(0)), texto)
+    # 10. Inteiros restantes por extenso.
+    #     A guarda de letra é essencial: sem ela, "B3" virava "Btrês", "PETR4"
+    #     virava "PETRquatro" e "Web3" virava "Webtrês". B3 é a bolsa e aparece
+    #     em quase toda matéria de mercado do Valor. Dígito colado em letra é
+    #     ticker ou sigla — o TTS lê melhor na forma original.
+    #     A guarda inclui dígito além de letra: sem isso, em "G20" o motor
+    #     falhava no '2' (precedido de letra) mas casava no '0', produzindo
+    #     "G2zero".
+    texto = re.sub(r"(?<![A-Za-zÀ-ÿ0-9])\d+(?![A-Za-zÀ-ÿ0-9])",
+                   lambda m: num_por_extenso(m.group(0)), texto)
 
     # 11. Dicionário de siglas e expressões (palavra inteira)
     for sigla, expan in PRONUNCIA.items():
@@ -643,16 +675,19 @@ def gerar_audio(txt_file=None):
 
     texto = limpar_texto_para_audio(texto_bruto)
     n_chars = len(texto)
-    print(f"   {n_chars:,} chars | ~{n_chars // 150} minutos de áudio estimado")
+    print(f"   {n_chars:,} chars | ~{n_chars / 810:.1f} min de áudio estimado")
 
     if restante is not None and n_chars > restante:
         print(f"⚠️  Atenção: texto ({n_chars} chars) > saldo disponível ({restante} chars)")
+        if not sys.stdin.isatty():
+            print("   Sem terminal interativo — abortando por segurança.")
+            sys.exit(1)
         resp = input("   Continuar mesmo assim? (s/n): ")
         if resp.lower() != "s":
             sys.exit(0)
 
-    # Dividir em chunks se necessário
-    chunks = dividir_em_chunks(texto)
+    # Dividir em chunks se necessário (o limite depende do modelo)
+    chunks = dividir_em_chunks(texto, model=model)
     print(f"\n🔊 Gerando áudio em {len(chunks)} parte(s)...")
 
     ts         = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -671,6 +706,13 @@ def gerar_audio(txt_file=None):
                 next_text=chunks[i] if i < len(chunks) else None,
             )
             secs = (datetime.now() - t0).seconds
+            # Mesma sanidade do pipeline: áudio curto demais = narração
+            # truncada. Antes, o parcial era gravado e anunciado como sucesso.
+            minimo = max(8000, int(len(chunk) * 400))
+            if len(audio_bytes) and len(audio_bytes) < minimo:
+                raise RuntimeError(
+                    f"áudio suspeito: {len(audio_bytes):,} bytes para "
+                    f"{len(chunk):,} chars (esperado ≥ {minimo:,})")
             print(f"✅ ({secs}s)")
         except Exception as e:
             print(f"❌ {e}")

@@ -302,6 +302,11 @@ def _eh_conteudo(tok):
 # a partir da manchete das Casas Bahia e passaram a casar em "recuperação
 # econômica" e "decisão judicial". Como bigrama ("recuperação judicial") são
 # ótimas; como unigrama, são ruído.
+# Conectores que podem ficar NO MEIO de um termo aprendido, preservando o texto
+# original: "score DE crédito", "crédito PARA pme", "antecipação DE recebíveis".
+CONECTORES = {"de", "da", "do", "das", "dos", "em", "no", "na", "nos", "nas",
+              "a", "o", "e", "com", "para", "por", "ao", "à", "aos", "às"}
+
 AMBIGUOS_SOZINHOS = {
     "recuperação", "recuperacao", "judicial", "passivo", "ativo", "mercado",
     "empresa", "empresas", "companhia", "companhias", "negócio", "negocio",
@@ -330,14 +335,24 @@ def extrair_candidatos(titulo, ja_existentes, permitir_unigram=True,
     `titulo_original` preserva a capitalização, necessária para achar os nomes
     próprios; sem ele, nenhum unigrama é extraído.
     """
+    # Os tokens são mantidos NA ÍNTEGRA, com as stopwords. Antes elas eram
+    # removidas antes de formar o bigrama, e o termo aprendido ficava
+    # impossível de casar: de "score de crédito" saía "score crédito", que
+    # casa_termo nunca encontra no texto (ele exige adjacência literal).
+    # Na prática o aprendizado inteiro — inclusive os vetos — era letra morta.
     toks = re.findall(r"[a-zà-ú0-9&]+", titulo.lower())
-    toks = [t for t in toks
-            if t not in STOPWORDS and len(t) > 2 and not t.isdigit()]
     grams = []
-    for i in range(len(toks) - 1):                     # bigramas (preferidos)
-        a, b = toks[i], toks[i + 1]
-        if _eh_conteudo(a) and _eh_conteudo(b):
-            grams.append(f"{a} {b}")
+    for i, a in enumerate(toks):
+        if not _eh_conteudo(a):
+            continue
+        for salto in (1, 2):            # vizinho direto, ou com 1 conector
+            j = i + salto
+            if j >= len(toks):
+                break
+            if salto == 2 and toks[i + 1] not in CONECTORES:
+                break
+            if _eh_conteudo(toks[j]):
+                grams.append(" ".join(toks[i:j + 1]))
 
     if permitir_unigram and titulo_original:
         # Nome próprio = capitalizado e NÃO na primeira posição (a primeira

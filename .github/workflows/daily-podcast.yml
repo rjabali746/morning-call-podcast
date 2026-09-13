@@ -18,6 +18,13 @@ permissions:
   contents: write   # necessário para fazer commit do MP3 e feed.xml
 
 # ─── Job principal ────────────────────────────────────────────────────────────
+# O gatilho é externo (cron-job.org), que REENVIA em timeout ou resposta
+# não-2xx. Sem esta trava, dois disparos geram dois episódios no feed
+# com o mesmo título e GUIDs diferentes — e o Spotify publica os dois.
+concurrency:
+  group: morning-call
+  cancel-in-progress: false
+
 jobs:
   gerar-podcast:
     name: Gerar e publicar episódio
@@ -71,7 +78,7 @@ jobs:
         run: |
           git config user.name  "morning-call-bot"
           git config user.email "morning-call-bot@users.noreply.github.com"
-          git add -- perfil_interesses.json manchetes_processadas.log 2>/dev/null || true
+          git add -A -- perfil_interesses.json manchetes_processadas.log 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Nenhuma mudança no perfil — nada a commitar."
           else

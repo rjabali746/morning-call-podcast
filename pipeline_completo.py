@@ -27,7 +27,6 @@ import json
 import time
 import glob
 import logging
-import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -237,8 +236,10 @@ def etapa_scraping() -> str:
                 used_ordenados = json.load(f)
             used_urls = set(used_ordenados)
             log.info(f"  📚 {len(used_urls)} artigos já usados em episódios anteriores")
-        except Exception:
-            pass
+        except Exception as e:
+            # Histórico ilegível = zero deduplicação. Silenciar isso fazia o
+            # episódio repetir conteúdo sem nenhuma pista no log.
+            log.warning(f"  ⚠️  used_articles.json ilegível ({e}) — sem deduplicação hoje!")
 
     noticias = buscar_noticias(session)
     if not noticias:
@@ -250,8 +251,12 @@ def etapa_scraping() -> str:
     if repetidos:
         log.info(f"  🔄 {repetidos} artigo(s) já usados removidos — {len(noticias_novas)} novos")
     if not noticias_novas:
-        log.warning("  ⚠️  Todos os artigos já foram usados — incluindo os mais recentes mesmo assim")
-        noticias_novas = noticias[:10]
+        # Antes reprisava os artigos de ontem. Como eles têm score alto, a
+        # camada 1 os escolhia e o pool nunca era consultado — o ouvinte
+        # recebia o episódio do dia anterior de novo. Agora o pool vem antes:
+        # deixamos a lista vazia e o resgate assume.
+        log.warning("  ⚠️  Nenhum artigo novo hoje — o episódio virá do pool de reserva")
+        noticias_novas = []
 
     noticias = noticias_novas
 
@@ -264,8 +269,18 @@ def etapa_scraping() -> str:
     pool = carregar_pool()
     if pool:
         log.info(f"  ♻️  Pool de reserva: {len(pool)} notícia(s) guardada(s)")
-    noticias_selecionadas = selecionar_com_resgate(noticias[:10], pool=pool)
+    noticias_selecionadas = selecionar_com_resgate(
+        noticias[:10], pool=pool, ja_usados=used_urls)
     log.info(f"  🎙️  {len(noticias_selecionadas)} notícias selecionadas para o episódio")
+
+    # Sem notícia nenhuma o roteiro sai só com abertura e encerramento — um
+    # episódio de 6 segundos, que passaria na checagem de sanidade do áudio e
+    # iria ao ar. Melhor falhar alto e não publicar nada.
+    if not noticias_selecionadas:
+        raise ValueError(
+            "Nenhuma notícia disponível (nem nova, nem no pool de reserva). "
+            "Episódio não será publicado."
+        )
 
     # ── Histórico: marcar como usadas SÓ as que entraram no episódio ─────────
     # Antes, todo artigo raspado virava "usado", mesmo sem ser narrado — o que
@@ -327,7 +342,7 @@ def etapa_tts(txt_path: str, config: dict) -> str:
         texto_bruto = f.read()
     texto   = limpar_texto_para_audio(texto_bruto)
     n_chars = len(texto)
-    log.info(f"  📝 {n_chars:,} chars | ~{n_chars // 150} min de áudio estimado")
+    log.info(f"  📝 {n_chars:,} chars | ~{n_chars / 810:.1f} min de áudio estimado")
 
     if restante is not None and n_chars > restante:
         raise RuntimeError(
@@ -375,7 +390,7 @@ def etapa_tts(txt_path: str, config: dict) -> str:
         f.write(audio_bytes)
 
     tamanho_mb = mp3_path.stat().st_size / (1024 * 1024)
-    dur_est    = len(texto) / 950   # ~950 chars por minuto narrado em pt-BR
+    dur_est    = len(texto) / 810   # taxa medida em episódio real pt-BR
     log.info(f"  ✅ {mp3_path.name} ({tamanho_mb:.1f} MB, ~{dur_est:.1f} min)")
     return str(mp3_path)
 
@@ -482,13 +497,23 @@ def etapa_publicacao(mp3_path: str, config: dict):
 
     # Persistir o estado entre execuções: histórico de artigos narrados
     # (evita repetição) e pool de reserva (alimenta os dias magros).
+    # O retorno PRECISA ser conferido. Se o upload falhar em silêncio, no dia
+    # seguinte o histórico está velho e o episódio repete notícias — que é
+    # exatamente o que esses arquivos existem para evitar.
     for nome in ARQUIVOS_DE_ESTADO:
         caminho = BASE / nome
-        if caminho.exists():
-            gh.upload_arquivo(
-                caminho_local   = str(caminho),
-                caminho_repo    = nome,
-                mensagem_commit = f"📝 {nome} — {titulo_ep}",
+        if not caminho.exists():
+            continue
+        ok_estado, _ = gh.upload_arquivo(
+            caminho_local   = str(caminho),
+            caminho_repo    = nome,
+            mensagem_commit = f"📝 {nome} — {titulo_ep}",
+        )
+        if not ok_estado:
+            raise RuntimeError(
+                f"Falha ao salvar {nome} no GitHub. O episódio foi publicado, "
+                f"mas sem isso o próximo pode repetir notícias — a retentativa "
+                f"vai tentar de novo."
             )
 
     log.info(f"  ✅ Publicado!")

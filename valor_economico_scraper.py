@@ -36,6 +36,10 @@ except ImportError:
 CONFIG_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 COOKIE_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "valor_cookies.json")
 PERFIL_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perfil_interesses.json")
+
+# Score de notícia vetada. Tão negativo que nenhuma soma de bônus a resgata;
+# qualquer score <= SCORE_VETO/2 é tratado como vetado em todas as camadas.
+SCORE_VETO = -99
 POOL_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pool_reserva.json")
 
 # ── Pool de reserva ───────────────────────────────────────────────────────────
@@ -134,7 +138,10 @@ PALAVRAS_CHAVE = [
     "empréstimo pessoal", "bnpl", "inadimplência",
     "inadimplencia", "score de crédito", "serasa",
     # Adquirência (core)
-    "adquirente", "adquirência", "maquininha", "cielo", "rede",
+    # "rede" sozinho fica de fora: no portão de entrada ele deixava passar
+    # "rede de atendimento", "rede elétrica", "rede de esgoto". A Rede
+    # adquirente é capturada pelos demais termos da família.
+    "adquirente", "adquirência", "maquininha", "cielo",
     "mdr", "taxa de desconto", "credenciamento", "split de pagamento",
     "tap to pay", "infinitepay",
     # Crédito PME (core)
@@ -335,7 +342,7 @@ def calcular_score_perfil(noticia, perfil):
     for palavra in perfil.get("vetos", []):
         if casa_termo(palavra, texto):
             detalhes.append(f"VETO({palavra})")
-            return -99, detalhes
+            return SCORE_VETO, detalhes
 
     return score, detalhes
 
@@ -662,12 +669,28 @@ def carregar_pool():
     try:
         with open(POOL_FILE, encoding="utf-8") as f:
             pool = json.load(f)
-    except Exception:
+        if not isinstance(pool, list):
+            print("  ⚠️  pool_reserva.json não é uma lista — ignorando.")
+            return []
+        limite = (datetime.now() - timedelta(days=POOL_DIAS)).isoformat()
+        vivos, sem_data = [], 0
+        for n in pool:
+            if not isinstance(n, dict):
+                continue
+            carimbo = n.get("_guardado_em", "")
+            if not carimbo:
+                sem_data += 1          # sem carimbo não dá para saber a idade
+                continue
+            if carimbo >= limite:
+                vivos.append(n)
+    except Exception as e:
+        print(f"  ⚠️  Pool ilegível ({e}) — seguindo sem reserva.")
         return []
-    limite = (datetime.now() - timedelta(days=POOL_DIAS)).isoformat()
-    vivos  = [n for n in pool if n.get("_guardado_em", "") >= limite]
-    if len(pool) != len(vivos):
-        print(f"  🗑️  Pool: {len(pool) - len(vivos)} notícia(s) vencida(s) descartada(s)")
+    vencidas = len(pool) - len(vivos) - sem_data
+    if vencidas > 0:
+        print(f"  🗑️  Pool: {vencidas} notícia(s) vencida(s) descartada(s)")
+    if sem_data:
+        print(f"  ⚠️  Pool: {sem_data} item(ns) sem carimbo de data — descartado(s)")
     return vivos
 
 
@@ -715,7 +738,7 @@ def salvar_pool(pool_antigo, candidatas, usadas_links):
 
 
 def selecionar_com_resgate(noticias, pool=None, min_noticias=MIN_NOTICIAS_EPISODIO,
-                           **kwargs):
+                           ja_usados=None, **kwargs):
     """
     Monta o episódio em três camadas, da melhor para a pior:
 
@@ -727,13 +750,26 @@ def selecionar_com_resgate(noticias, pool=None, min_noticias=MIN_NOTICIAS_EPISOD
     Assim o episódio mantém o tamanho sem nunca precisar narrar algo irrelevante
     enquanto houver notícia boa guardada.
     """
+    # Notícia vetada está fora de TODAS as camadas. Sem este filtro o veto
+    # virava letra morta justamente no dia magro: como -99 é o menor score, a
+    # camada de último recurso ordenava por score e acabava pegando o fundo do
+    # poço — exatamente o que o veto existe para impedir.
+    noticias = [n for n in noticias if n.get("score_relevancia", 0) > SCORE_VETO / 2]
+
     selecionadas = selecionar_por_tempo(noticias, min_noticias=0, **kwargs)
     escolhidos   = {n.get("link") for n in selecionadas}
 
     # ── Camada 2: resgate do pool ────────────────────────────────────────────
+    chars_extra = 0
     resgatadas = []
     if len(selecionadas) < min_noticias and pool:
-        reserva = sorted((n for n in pool if n.get("link") not in escolhidos),
+        # `ja_usados` vem do histórico de narradas: o pool só é limpo quando o
+        # upload de estado dá certo, então conferir aqui evita re-narrar uma
+        # notícia caso aquele upload tenha falhado num dia anterior.
+        bloqueados = set(escolhidos) | set(ja_usados or ())
+        reserva = sorted((n for n in pool
+                          if n.get("link") not in bloqueados
+                          and n.get("score_relevancia", 0) > SCORE_VETO / 2),
                          key=lambda x: x.get("score_relevancia", 0), reverse=True)
         for n in reserva:
             if len(selecionadas) >= min_noticias:
@@ -741,6 +777,7 @@ def selecionar_com_resgate(noticias, pool=None, min_noticias=MIN_NOTICIAS_EPISOD
             selecionadas.append(n)
             escolhidos.add(n.get("link"))
             resgatadas.append(n)
+            chars_extra += _custo_tts(n)
         if resgatadas:
             print(f"\n  ♻️  {len(resgatadas)} notícia(s) resgatada(s) do pool de reserva:")
             for n in resgatadas:
@@ -759,12 +796,29 @@ def selecionar_com_resgate(noticias, pool=None, min_noticias=MIN_NOTICIAS_EPISOD
             print(f"       • [{n.get('score_relevancia','?'):>3}pts] {n.get('titulo','')[:58]}")
             selecionadas.append(n)
             escolhidos.add(n.get("link"))
+            chars_extra += _custo_tts(n)
 
     if len(selecionadas) < min_noticias:
         print(f"\n  ⚠️  Só foi possível montar {len(selecionadas)} notícia(s) "
               f"(mínimo desejado: {min_noticias}).")
 
+    # As camadas 2 e 3 entram DEPOIS que selecionar_por_tempo fechou a conta,
+    # então o custo delas precisa ser somado à parte — senão o episódio pode
+    # passar do teto de quota sem ninguém perceber.
+    if chars_extra:
+        print(f"       ↳ complemento custou ~{chars_extra} chars extras de quota")
+
     return selecionadas
+
+
+def _custo_tts(noticia):
+    """Custo em caracteres normalizados de uma notícia acrescentada fora da
+    contagem original (resgate ou último recurso)."""
+    conteudo = noticia.get("conteudo_completo") or noticia.get("resumo") or ""
+    resumo   = resumir_noticia(conteudo, max_chars=MAX_CHARS_RESUMO,
+                               max_chars_tts=MAX_CHARS_TTS_RESUMO)
+    return (chars_no_tts(noticia.get("titulo", "")) + chars_no_tts(resumo)
+            + _CHARS_OVERHEAD_NOTICIA)
 
 
 def selecionar_por_tempo(noticias, max_min=MAX_MIN_PODCAST, wpm=WPM_PODCAST,
@@ -1119,7 +1173,11 @@ def resumir_noticia(conteudo, max_chars=500, max_chars_tts=None):
                 break
             candidato = (resumo + (" " if resumo else "") + frase)
             if max_chars_tts and chars_no_tts(candidato) > max_chars_tts:
-                return resumo.strip()      # frase seguinte estouraria a quota
+                # Se nem a PRIMEIRA frase cabe, aceita mesmo assim: devolver
+                # resumo vazio deixaria a notícia sem corpo no episódio.
+                if not resumo:
+                    resumo = candidato
+                break
             resumo = candidato
         if len(resumo) >= max_chars * 0.7:
             break
