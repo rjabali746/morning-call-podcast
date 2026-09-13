@@ -119,7 +119,7 @@ VALOR_SECOES = [
     ("Empresas",   "https://valor.globo.com/empresas/"),
     ("Mercados",   "https://valor.globo.com/financas/mercados/"),
     ("Brasil",     "https://valor.globo.com/brasil/"),
-    ("Agro",       "https://valor.globo.com/agro/"),
+    # ("Agro", ...) removido: a seção responde 404 e agro puro já é penalizado
 ]
 
 # Fallback: URLs antigas do valor.com.br

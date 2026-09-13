@@ -57,6 +57,11 @@ PESO_DESCARTE = -8
 # não só penalização. Rejeitar duas vezes o mesmo assunto é sinal inequívoco.
 MIN_REJEICOES_PARA_VETO = 2
 
+# Um termo só entra no perfil depois de aparecer em DUAS manchetes aprovadas.
+# Interesse de verdade se repete; cobertura de um caso isolado não.
+MIN_OCORRENCIAS_PARA_TERMO = 2
+MAX_PENDENTES = 120   # teto da quarentena de candidatos
+
 # Score abaixo do qual a manchete é considerada "novidade" (mal capturada).
 # Um tema core (peso 7) com 1 hit já dá 7; abaixo disso é sinal de lacuna.
 LIMIAR_NOVIDADE = 7
@@ -477,8 +482,34 @@ def analisar(perfil, gostei, nao):
             # titulo_original=m preserva a capitalização para achar nomes próprios
             for c in extrair_candidatos(m, ja, titulo_original=m):
                 cand[c] += 1
-    termos_novos = [t for t, _ in sorted(cand.items(), key=_salience,
-                                         reverse=True)][:MAX_TERMOS_POR_RUN]
+    # ── Regra das duas ocorrências ───────────────────────────────────────────
+    # Interesse durável se repete; evento isolado não. Uma única manchete sobre
+    # o caso BRB/Master ensinou "produção industrial", "escândalo político" e
+    # "investigação interna" — termos que descrevem AQUELE episódio e passam a
+    # casar em dado do IBGE e notícia de Congresso. Agora o termo fica em
+    # quarentena e só entra no perfil quando aparecer numa SEGUNDA manchete
+    # aprovada, em qualquer execução.
+    pendentes = perfil.get("_candidatos_pendentes", {})
+    termos_novos = []
+    for t, n in cand.items():
+        total = pendentes.get(t, 0) + n
+        if total >= MIN_OCORRENCIAS_PARA_TERMO:
+            termos_novos.append(t)
+    termos_novos = sorted(
+        termos_novos, key=lambda t: _salience((t, cand[t])), reverse=True
+    )[:MAX_TERMOS_POR_RUN]
+
+    # O que não atingiu o mínimo volta para a quarentena, com a contagem
+    novos_pendentes = dict(pendentes)
+    for t, n in cand.items():
+        if t in termos_novos:
+            novos_pendentes.pop(t, None)
+        else:
+            novos_pendentes[t] = novos_pendentes.get(t, 0) + n
+    # Teto para a quarentena não crescer sem fim
+    if len(novos_pendentes) > MAX_PENDENTES:
+        novos_pendentes = dict(sorted(novos_pendentes.items(),
+                                      key=lambda kv: -kv[1])[:MAX_PENDENTES])
 
     # ── Rejeições ────────────────────────────────────────────────────────────
     # Só bigramas: um termo único de rejeição barraria notícia legítima.
@@ -497,7 +528,8 @@ def analisar(perfil, gostei, nao):
     return {"bem": bem, "novidades": novidades,
             "termos_novos": termos_novos,
             "termos_descarte": termos_descarte,
-            "termos_veto": termos_veto}
+            "termos_veto": termos_veto,
+            "candidatos_pendentes": novos_pendentes}
 
 
 def imprimir_resumo(gostei, nao, plano):
@@ -518,6 +550,13 @@ def imprimir_resumo(gostei, nao, plano):
     if plano.get("termos_veto"):
         print(f"\n  ⛔ VETOS (rejeitados {MIN_REJEICOES_PARA_VETO}+ vezes — zeram a notícia):")
         for t in plano["termos_veto"]:
+            print(f"       • {t}")
+    pend = plano.get("candidatos_pendentes") or {}
+    aguardando = [t for t, n in pend.items() if n == 1]
+    if aguardando:
+        print(f"\n  ⏳ {len(aguardando)} termo(s) em quarentena — entram se "
+              f"aparecerem numa segunda manchete aprovada:")
+        for t in aguardando[:6]:
             print(f"       • {t}")
     if not plano["termos_novos"] and not plano["termos_descarte"] \
             and not plano.get("termos_veto"):
@@ -559,6 +598,9 @@ def aplicar(perfil, gostei, plano):
         vetos = perfil.setdefault("vetos", [])
         if t not in {v.lower() for v in vetos}:
             vetos.append(t)
+
+    if "candidatos_pendentes" in plano:
+        perfil["_candidatos_pendentes"] = plano["candidatos_pendentes"]
 
     hist = perfil.setdefault("historico_exemplos", [])
     for m in gostei:

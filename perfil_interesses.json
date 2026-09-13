@@ -2,7 +2,7 @@
   "_meta": {
     "versao": 2,
     "ultima_atualizacao": "2026-09-13",
-    "total_exemplos_analisados": 21,
+    "total_exemplos_analisados": 17,
     "contexto_profissional": "Empresa com forte atuação em crédito pessoa física e adquirência",
     "descricao": "Perfil de interesses do Roberto Jabali. Temas de peso 7 = core do negócio (crédito PF, adquirência, PME). Peso 5 = alto interesse pessoal/estratégico. Peso 4 = relevante mas secundário. Pesos menores = contexto de mercado.",
     "escala_de_pesos": {
@@ -418,21 +418,6 @@
         "sustentável",
         "carbono"
       ]
-    },
-    {
-      "nome": "novos_interesses_a_revisar",
-      "descricao": "Termos aprendidos das manchetes favoritas — revisar e promover a temas definitivos.",
-      "peso": 2,
-      "palavras": [
-        "industrial de documentos",
-        "investigação interna",
-        "produção industrial",
-        "usados em carteiras",
-        "escândalo político",
-        "interna do master",
-        "documentos usados",
-        "político judicial"
-      ]
     }
   ],
   "entidades_prioritarias": {
@@ -639,10 +624,8 @@
     "Anthropic pede que laboratórios de IA considerem pausa no desenvolvimento e alerta que humanos podem perder o controle",
     "Mercado Pago entra no crédito consignado privado",
     "Casas Bahia pede recuperação judicial com passivo de R$ 17,3 bilhões",
-    "https://valor.globo.com/financas/noticia/2026/09/13/brb-diz-ter-sido-vtima-de-atos-criminosos.ghtml",
-    "https://valor.globo.com/financas/noticia/2026/09/13/investigao-interna-do-master-apontou-produo-industrial-de-documentos-usados-em-carteiras-do-brb-diz-pf.ghtml",
-    "https://valor.globo.com/financas/noticia/2026/09/12/em-processo-mastercard-diz-que-liquidante-do-will-bank-interrompeu-repasses.ghtml",
-    "https://valor.globo.com/politica/noticia/2026/09/12/de-fraude-no-brb-a-escndalo-poltico-o-que-as-investigaes-do-caso-master-revelam-at-agora.ghtml"
+    "Investigação interna do Master apontou produção industrial de documentos usados em carteiras de crédito"
   ],
-  "vetos": []
+  "vetos": [],
+  "_candidatos_pendentes": {}
 }

@@ -161,6 +161,12 @@ Responda SOMENTE com um array JSON, sem texto antes ou depois:
 [{{"i": 0, "nota": 7, "motivo": "razão em até 8 palavras"}}, ...]"""
 
 
+# A Groq (e outros) ficam atrás da Cloudflare, que barra cliente sem
+# identificação com "error code: 1010" — HTTP 403. O urllib manda
+# "Python-urllib/3.11" por padrão e leva bloqueio. Identificar-se resolve.
+USER_AGENT = "morning-call-jabali/1.0 (+https://github.com/rjabali746/morning-call-podcast)"
+
+
 def _chamar_api(url, modelo, chave, formato, prompt):
     """Uma chamada de inferência. Dois formatos cobrem todos os provedores."""
     if formato == "anthropic":
@@ -174,11 +180,23 @@ def _chamar_api(url, modelo, chave, formato, prompt):
                  "messages": [{"role": "user", "content": prompt}]}
         headers = {"Authorization": f"Bearer {chave}",
                    "Content-Type": "application/json"}
+    headers["User-Agent"] = USER_AGENT
+    headers["Accept"]     = "application/json"
 
-    req = urllib.request.Request(
-        url, data=json.dumps(corpo).encode("utf-8"), headers=headers)
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        resposta = json.loads(r.read().decode("utf-8"))
+    dados = json.dumps(corpo).encode("utf-8")
+
+    # `requests` primeiro: a pilha TLS dele passa pela Cloudflare com mais
+    # facilidade que a do urllib. Cai para a biblioteca padrão se não existir.
+    try:
+        import requests as _rq
+        r = _rq.post(url, data=dados, headers=headers, timeout=TIMEOUT)
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code} — {r.text[:200]}")
+        resposta = r.json()
+    except ImportError:
+        req = urllib.request.Request(url, data=dados, headers=headers)
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            resposta = json.loads(r.read().decode("utf-8"))
 
     if formato == "anthropic":
         return resposta["content"][0]["text"]
