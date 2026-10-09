@@ -203,6 +203,43 @@ def _chamar_api(url, modelo, chave, formato, prompt):
     return resposta["choices"][0]["message"]["content"]
 
 
+# Preferência ao escolher um substituto quando o modelo configurado some do
+# catálogo. Provedores aposentam modelos com frequência — a Groq tirou o
+# llama-3.3-70b-versatile do ar e o pipeline perdeu a IA em silêncio.
+PREFERENCIA_MODELOS = ["gpt-oss-120b", "llama-4", "llama-3.3", "70b",
+                       "qwen", "kimi", "gemini", "gpt-oss", "llama"]
+NAO_CHAT = ("whisper", "guard", "tts", "embed", "audio", "vision-only",
+            "playai", "orpheus", "moderation")
+
+
+def _descobrir_modelo(url_chat, chave, formato):
+    """
+    Lista os modelos do provedor e escolhe um substituto de chat.
+    Funciona em qualquer API no dialeto OpenAI: o catálogo fica em /models,
+    ao lado de /chat/completions.
+    """
+    if formato != "openai" or "/chat/completions" not in url_chat:
+        return None
+    url_modelos = url_chat.replace("/chat/completions", "/models")
+    try:
+        import requests as _rq
+        r = _rq.get(url_modelos, timeout=30,
+                    headers={"Authorization": f"Bearer {chave}",
+                             "User-Agent": USER_AGENT})
+        if r.status_code != 200:
+            return None
+        ids = [m.get("id", "") for m in r.json().get("data", [])]
+    except Exception:
+        return None
+
+    ids = [i for i in ids if i and not any(x in i.lower() for x in NAO_CHAT)]
+    for pref in PREFERENCIA_MODELOS:
+        for i in ids:
+            if pref in i.lower():
+                return i
+    return ids[0] if ids else None
+
+
 def _extrair_json(texto):
     """Pega o array JSON mesmo se o modelo embrulhar em cerca de código."""
     ini = texto.find("[")
@@ -230,9 +267,24 @@ def reordenar_por_ia(noticias, perfil=None, api_key=None, peso=PESO_IA):
         chave = api_key
 
     candidatas = noticias[:MAX_CAND]
+    prompt = _montar_prompt(perfil, candidatas)
     try:
-        bruto = _chamar_api(url, modelo, chave, formato,
-                            _montar_prompt(perfil, candidatas))
+        try:
+            bruto = _chamar_api(url, modelo, chave, formato, prompt)
+        except RuntimeError as e:
+            # Modelo aposentado pelo provedor: descobre um substituto e tenta
+            # de novo uma vez, em vez de perder a etapa até alguém notar.
+            msg = str(e)
+            if "model_not_found" not in msg and "HTTP 404" not in msg \
+                    and "does not exist" not in msg:
+                raise
+            novo = _descobrir_modelo(url, chave, formato)
+            if not novo or novo == modelo:
+                raise
+            print(f"  ⚠️  Modelo '{modelo}' não existe mais em {nome} — "
+                  f"usando '{novo}'. Para fixar, crie o secret IA_MODELO.")
+            modelo = novo
+            bruto = _chamar_api(url, modelo, chave, formato, prompt)
         notas = _extrair_json(bruto)
     except urllib.error.HTTPError as e:
         detalhe = ""

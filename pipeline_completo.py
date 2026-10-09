@@ -648,7 +648,7 @@ def main():
         log.info(f"  📄 Roteiro de fallback: {Path(txt_path).name}")
 
     # ── ETAPA 2: TTS ─────────────────────────────────────────────────────────
-    log.info("\n── ETAPA 2/3: TTS (ElevenLabs) ─────────────────────────────")
+    log.info("\n── ETAPA 2/3: TTS (síntese de voz) ─────────────────────────")
     mp3_path = None
     _txt     = txt_path
     _cfg     = config
