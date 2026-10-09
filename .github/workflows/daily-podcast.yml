@@ -91,6 +91,8 @@ jobs:
         env:
           # Provedor de voz. Com AZURE_SPEECH_KEY definida, usa Azure;
           # sem ela, cai na ElevenLabs. TTS_PROVEDOR força um dos dois.
+          # Endereço fixo da seção de Crédito (opcional)
+          VALOR_URL_CREDITO:       ${{ secrets.VALOR_URL_CREDITO }}
           TTS_PROVEDOR:            ${{ secrets.TTS_PROVEDOR }}
           AZURE_SPEECH_KEY:        ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION:     ${{ secrets.AZURE_SPEECH_REGION }}

@@ -208,6 +208,9 @@ def etapa_scraping() -> str:
     from valor_economico_scraper import (
         buscar_noticias,
         enriquecer_artigos,
+        HistoricoUso,
+        chaves_de_uso,
+        priorizar_secao,
         repontuar_com_conteudo,
         selecionar_com_resgate,
         carregar_pool,
@@ -248,7 +251,11 @@ def etapa_scraping() -> str:
         raise ValueError("Nenhuma notícia encontrada")
 
     # ── Filtrar artigos já usados ─────────────────────────────────────────────
-    noticias_novas = [n for n in noticias if n.get("link") not in used_urls]
+    # Já narrada = mesmo link (normalizado) OU título semelhante a um já
+    # narrado. O link sozinho deixava repetir a notícia republicada com URL
+    # nova — comum numa seção temática como Crédito.
+    historico = HistoricoUso(used_ordenados)
+    noticias_novas = [n for n in noticias if not historico.ja_narrada(n)]
     repetidos = len(noticias) - len(noticias_novas)
     if repetidos:
         log.info(f"  🔄 {repetidos} artigo(s) já usados removidos — {len(noticias_novas)} novos")
@@ -260,7 +267,10 @@ def etapa_scraping() -> str:
         log.warning("  ⚠️  Nenhum artigo novo hoje — o episódio virá do pool de reserva")
         noticias_novas = []
 
-    noticias = noticias_novas
+    # As melhores da seção de Crédito vão para a frente ANTES de baixar o
+    # texto completo — só as 10 primeiras são enriquecidas, e uma matéria de
+    # Crédito com score modesto ficaria de fora sem isso.
+    noticias = priorizar_secao(noticias_novas)
 
     # Enriquecer até top 10 candidatos com conteúdo completo via Selenium
     noticias = enriquecer_artigos(session, noticias, top=10, cookies_list=cookies_list)
@@ -287,7 +297,7 @@ def etapa_scraping() -> str:
     if pool:
         log.info(f"  ♻️  Pool de reserva: {len(pool)} notícia(s) guardada(s)")
     noticias_selecionadas = selecionar_com_resgate(
-        noticias[:10], pool=pool, ja_usados=used_urls)
+        noticias[:10], pool=pool, ja_usados=historico)
     log.info(f"  🎙️  {len(noticias_selecionadas)} notícias selecionadas para o episódio")
 
     # Sem notícia nenhuma o roteiro sai só com abertura e encerramento — um
@@ -303,11 +313,14 @@ def etapa_scraping() -> str:
     # Antes, todo artigo raspado virava "usado", mesmo sem ser narrado — o que
     # queimava conteúdo bom e deixava os dias fracos sem nada para resgatar.
     narradas = [n["link"] for n in noticias_selecionadas if n.get("link")]
-    # Ordem importa: o corte em 200 tem que descartar os MAIS ANTIGOS. Um set
-    # não tem ordem, então o corte removia links ao acaso — e um artigo já
-    # narrado podia sumir do histórico e ser narrado de novo dias depois.
-    anteriores = [u for u in used_ordenados if u not in set(narradas)]
-    todas_used = (anteriores + narradas)[-200:]   # histórico de ~40 dias
+    # Cada narrada grava duas chaves: link normalizado e assinatura do título.
+    novas_chaves = [c for n in noticias_selecionadas for c in chaves_de_uso(n)]
+    # Ordem importa: o corte tem que descartar as MAIS ANTIGAS. Um set não tem
+    # ordem, então o corte removia entradas ao acaso — e uma notícia já
+    # narrada podia sumir do histórico e voltar dias depois.
+    anteriores = [u for u in used_ordenados if u not in set(novas_chaves)]
+    # 400 entradas = ~200 notícias (duas chaves cada) ≈ 8 semanas
+    todas_used = (anteriores + novas_chaves)[-400:]
     with open(used_file, "w", encoding="utf-8") as f:
         json.dump(todas_used, f, ensure_ascii=False, indent=2)
     log.info(f"  💾 Histórico: {len(narradas)} narrada(s) hoje, {len(todas_used)} no total")
@@ -619,7 +632,7 @@ def main():
         # direto os 10 artigos estouraria a quota do ElevenLabs.
         from valor_economico_scraper import (
             formatar_para_podcast, selecionar_com_resgate,
-            carregar_pool, salvar_pool,
+            carregar_pool, salvar_pool, chaves_de_uso,
         )
         pool_fb  = carregar_pool()
         sel_fb   = selecionar_com_resgate(noticias_fb[:10], pool=pool_fb)
@@ -629,6 +642,7 @@ def main():
         # Mesmo no fallback o estado precisa ser atualizado: sem isso, uma
         # notícia resgatada continuaria no pool e seria narrada de novo.
         narradas_fb = [n["link"] for n in sel_fb if n.get("link")]
+        chaves_fb   = [c for n in sel_fb for c in chaves_de_uso(n)]
         used_file   = BASE / "used_articles.json"
         antes_fb    = []
         if used_file.exists():
@@ -637,9 +651,9 @@ def main():
                     antes_fb = json.load(f)
             except Exception:
                 antes_fb = []
-        restante = [u for u in antes_fb if u not in set(narradas_fb)]
+        restante = [u for u in antes_fb if u not in set(chaves_fb)]
         with open(used_file, "w", encoding="utf-8") as f:
-            json.dump((restante + narradas_fb)[-200:], f, ensure_ascii=False, indent=2)
+            json.dump((restante + chaves_fb)[-400:], f, ensure_ascii=False, indent=2)
         salvar_pool(pool_fb, noticias_fb[:10], narradas_fb)
         ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
         txt_path = str(BASE / f"texto_episodio_{ts}.txt")

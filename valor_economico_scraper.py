@@ -113,6 +113,50 @@ def chars_no_tts(texto):
         # saturadas de números chega a 1,7. 1,25 é um meio-termo conservador.
         return int(len(texto) * 1.25)
 
+# ── Seção de Crédito: fonte PRIORITÁRIA ───────────────────────────────────────
+# O assunto core do Roberto é crédito; a página temática do Valor entrega isso
+# já curado pela redação. Ela é raspada PRIMEIRO, sem o filtro de palavras-chave
+# (a editoria já decidiu que é crédito) e ganha bônus no score.
+#
+# Endereço confirmado pelo Roberto em 10/10/2026. Os demais candidatos ficam
+# como reserva caso o Valor reorganize as seções; o primeiro que devolver
+# matérias é usado. O secret VALOR_URL_CREDITO, se existir, vence todos.
+SECAO_CREDITO = "Crédito"
+CANDIDATAS_URL_CREDITO = [
+    "https://valor.globo.com/financas/credito/",   # confirmado
+    "https://valor.globo.com/financas/bancos/",
+    "https://valor.globo.com/tudo-sobre/credito/",
+]
+# Bônus somado ao score das notícias que vieram da seção prioritária. +6 vale
+# quase um tema core inteiro: põe essas matérias na frente sem atropelar uma
+# notícia de outra seção que seja claramente mais relevante.
+SECOES_PRIORITARIAS = {SECAO_CREDITO: 6}
+# Quantas matérias ler da seção prioritária (das demais seções são 30)
+MAX_CARDS_PRIORITARIA = 40
+# VAGAS RESERVADAS no episódio para a seção de Crédito. O bônus de score
+# sozinho não basta: uma matéria de crédito cujo vocabulário o perfil não
+# cobre tira 0 + 6 pontos e perde para qualquer notícia de Ibovespa com 20.
+# Aqui as melhores de Crédito entram primeiro, garantidas — desde que não
+# estejam vetadas nem penalizadas abaixo do mínimo.
+VAGAS_CREDITO = 2
+
+
+def priorizar_secao(noticias, secao=SECAO_CREDITO, vagas=VAGAS_CREDITO,
+                    min_score=6):
+    """
+    Move as `vagas` melhores notícias da seção prioritária para o início da
+    lista, mantendo o resto na ordem em que estava. Só promove quem tem
+    score >= min_score: matéria de Crédito penalizada (ex.: agro puro) ou
+    vetada não fura a fila.
+    """
+    elegiveis = [n for n in noticias
+                 if n.get("secao") == secao
+                 and n.get("score_relevancia", 0) >= min_score]
+    elegiveis.sort(key=lambda x: x.get("score_relevancia", 0), reverse=True)
+    promovidas = elegiveis[:vagas]
+    ids = {id(n) for n in promovidas}
+    return promovidas + [n for n in noticias if id(n) not in ids]
+
 # Páginas de seção do Valor (scraping direto, sem RSS)
 VALOR_SECOES = [
     ("Finanças",   "https://valor.globo.com/financas/"),
@@ -366,6 +410,14 @@ def calcular_score_perfil(noticia, perfil):
             detalhes.append(f"VETO({palavra})")
             return SCORE_VETO, detalhes
 
+    # ── Bônus de seção prioritária ───────────────────────────────────────────
+    # Aplicado DEPOIS do veto: uma matéria vetada continua vetada mesmo vindo
+    # da seção de Crédito.
+    bonus_secao = SECOES_PRIORITARIAS.get(noticia.get("secao", ""), 0)
+    if bonus_secao:
+        score += bonus_secao
+        detalhes.append(f"secao_{noticia.get('secao')}(+{bonus_secao})")
+
     return score, detalhes
 
 HEADERS = {
@@ -530,10 +582,110 @@ def login_globo(session, email, password):
 # SCRAPING DAS SEÇÕES
 # ============================================================================
 
-def scrape_secao(session, nome, url):
+# ============================================================================
+# IDENTIDADE DE NOTÍCIA — para nunca repetir entre dias
+# ============================================================================
+# Comparar só o link exato deixa dois furos:
+#   1. o MESMO artigo com endereço diferente (?utm=..., #ancora, http/https);
+#   2. a MESMA notícia republicada com URL nova quando o Valor atualiza a
+#      matéria ou a move de "ao vivo" para "notícia".
+# Uma seção temática como Crédito mostra matérias de vários dias seguidos,
+# então os dois casos aparecem. Cada notícia passa a ter duas chaves: o link
+# normalizado e uma assinatura do título, e qualquer uma delas basta para
+# considerá-la já narrada.
+
+PREFIXO_TITULO = "titulo:"
+LIMIAR_SEMELHANCA = 0.6   # fração de palavras em comum para ser "a mesma"
+
+_PALAVRAS_VAZIAS_TITULO = {
+    "a","o","os","as","um","uma","de","do","da","dos","das","em","no","na",
+    "nos","nas","por","para","com","e","ou","que","se","ao","aos","à","às",
+    "sobre","entre","após","diz","dizem","vai","vão","é","são","mais","menos",
+}
+
+
+def normalizar_link(link):
+    """Link canônico: sem parâmetros, âncora, barra final, e sempre https."""
+    if not link:
+        return ""
+    l = link.strip()
+    l = re.sub(r"[?#].*$", "", l)
+    l = re.sub(r"^http://", "https://", l)
+    l = l.replace("://www.", "://")
+    return l.rstrip("/").lower()
+
+
+def assinatura_titulo(titulo):
+    """
+    Conjunto das palavras de conteúdo do título, sem acento e em ordem
+    alfabética — imune a mudança de pontuação, caixa ou ordem das palavras.
+    """
+    t = sem_acento((titulo or "").lower())
+    toks = re.findall(r"[a-z0-9]+", t)
+    toks = sorted({w for w in toks
+                   if len(w) > 2 and w not in _PALAVRAS_VAZIAS_TITULO})
+    return " ".join(toks)
+
+
+def titulos_semelhantes(sig_a, sig_b, limiar=LIMIAR_SEMELHANCA):
+    """Mesma notícia? Compara a sobreposição das palavras (índice de Jaccard)."""
+    a, b = set(sig_a.split()), set(sig_b.split())
+    if not a or not b:
+        return False
+    # Títulos muito curtos geram falso positivo; exige mínimo de substância
+    if min(len(a), len(b)) < 3:
+        return a == b
+    return len(a & b) / len(a | b) >= limiar
+
+
+def chaves_de_uso(noticia):
+    """As chaves que marcam uma notícia como narrada no histórico."""
+    chaves = []
+    link = normalizar_link(noticia.get("link", ""))
+    if link:
+        chaves.append(link)
+    sig = assinatura_titulo(noticia.get("titulo", ""))
+    if sig:
+        chaves.append(PREFIXO_TITULO + sig)
+    return chaves
+
+
+class HistoricoUso:
+    """
+    Consulta rápida ao histórico de notícias já narradas.
+    Aceita o formato antigo (lista só de links) e o novo (links + títulos).
+    """
+    def __init__(self, entradas):
+        self.links  = set()
+        self.sigs   = []
+        for e in entradas or []:
+            if not isinstance(e, str):
+                continue
+            if e.startswith(PREFIXO_TITULO):
+                self.sigs.append(e[len(PREFIXO_TITULO):])
+            else:
+                self.links.add(normalizar_link(e))
+
+    def ja_narrada(self, noticia):
+        if normalizar_link(noticia.get("link", "")) in self.links:
+            return True
+        sig = assinatura_titulo(noticia.get("titulo", ""))
+        return any(titulos_semelhantes(sig, s) for s in self.sigs)
+
+    def __contains__(self, link):          # compatível com `link in usados`
+        return normalizar_link(link) in self.links
+
+    def __len__(self):
+        return len(self.links)
+
+
+def scrape_secao(session, nome, url, filtrar=True, max_cards=30):
     """
     Extrai lista de artigos de uma página de seção do Valor.
     Retorna lista de dicts: {titulo, link, resumo, secao}
+
+    `filtrar=False` dispensa o filtro de palavras-chave — usado na seção de
+    Crédito, onde a própria editoria do Valor já fez a curadoria do assunto.
     """
     noticias = []
     try:
@@ -556,7 +708,7 @@ def scrape_secao(session, nome, url):
             cards = soup.select("main a, section a, .content a")
 
         vistos = set()
-        for card in cards[:30]:
+        for card in cards[:max_cards]:
             try:
                 # Tentar extrair título
                 titulo_el = (
@@ -585,8 +737,13 @@ def scrape_secao(session, nome, url):
                 )
                 resumo = limpar_texto(resumo_el.get_text()) if resumo_el else ""
 
-                # Filtrar por relevância
-                if not eh_relevante(titulo + " " + resumo):
+                # Filtrar por relevância. Na seção prioritária o filtro é
+                # dispensado — mas aí exigimos que o link seja de MATÉRIA, para
+                # não pegar item de menu ("Assine", "Newsletter") como notícia.
+                if filtrar:
+                    if not eh_relevante(titulo + " " + resumo):
+                        continue
+                elif not re.search(r"/noticia/|\.ghtml$", link):
                     continue
 
                 noticias.append({
@@ -617,6 +774,27 @@ def buscar_noticias(session):
     print("\n📰 Extraindo notícias das seções do Valor...")
     todas = []
 
+    # ── 1º: seção de Crédito (prioritária) ───────────────────────────────────
+    # Vem primeiro de propósito: na deduplicação abaixo, a primeira ocorrência
+    # de cada notícia é a que fica — então uma matéria que aparece em Crédito
+    # E em Finanças mantém a etiqueta de Crédito e o bônus correspondente.
+    fixa = (os.environ.get("VALOR_URL_CREDITO") or "").strip()
+    candidatas = [fixa] if fixa else CANDIDATAS_URL_CREDITO
+    for url in candidatas:
+        print(f"  → {SECAO_CREDITO} ⭐ prioritária: {url}")
+        itens = scrape_secao(session, SECAO_CREDITO, url,
+                             filtrar=False, max_cards=MAX_CARDS_PRIORITARIA)
+        if itens:
+            print(f"    ✓ {len(itens)} matérias da seção de Crédito")
+            todas.extend(itens)
+            break
+        print("    ⚠️  sem matérias neste endereço — tentando o próximo")
+        time.sleep(1)
+    else:
+        print(f"    ⚠️  Nenhum endereço da seção de Crédito respondeu. "
+              f"Defina o secret VALOR_URL_CREDITO com o link correto.")
+
+    # ── 2º: demais seções ────────────────────────────────────────────────────
     for nome, url in VALOR_SECOES:
         print(f"  → {nome}: {url}")
         itens = scrape_secao(session, nome, url)
@@ -633,13 +811,20 @@ def buscar_noticias(session):
             todas.extend(itens)
             time.sleep(1)
 
-    # Deduplicar por título
-    vistos, unicas = set(), []
+    # Deduplicar no dia: mesmo link (normalizado) OU título semelhante. A
+    # comparação antiga — 50 primeiros caracteres idênticos — deixava passar a
+    # mesma matéria com chamada ligeiramente diferente em duas seções.
+    links_vistos, sigs_vistas, unicas = set(), [], []
     for n in todas:
-        chave = n["titulo"].lower()[:50]
-        if chave not in vistos:
-            vistos.add(chave)
-            unicas.append(n)
+        link = normalizar_link(n.get("link", ""))
+        sig  = assinatura_titulo(n.get("titulo", ""))
+        if link and link in links_vistos:
+            continue
+        if any(titulos_semelhantes(sig, s) for s in sigs_vistas):
+            continue
+        links_vistos.add(link)
+        sigs_vistas.append(sig)
+        unicas.append(n)
 
     # ── Scoring com perfil personalizado ─────────────────────────────────────
     perfil = carregar_perfil()
@@ -715,7 +900,9 @@ def repontuar_com_conteudo(noticias, perfil=None, max_chars=CHARS_CORPO_PARA_SCO
         antes = n.get("score_relevancia", 0)
         # Vetos e penalizações continuam valendo sobre o texto ampliado
         novo, det = calcular_score_perfil(
-            {"titulo": n.get("titulo", ""), "resumo": corpo[:max_chars]}, perfil)
+            {"titulo": n.get("titulo", ""), "resumo": corpo[:max_chars],
+             "secao": n.get("secao", "")},   # preserva o bônus de seção
+            perfil)
         n["score_relevancia"] = novo
         n["score_detalhes"]   = det
         n["score_manchete"]   = antes
@@ -792,6 +979,7 @@ def salvar_pool(pool_antigo, candidatas, usadas_links):
         conteudo = (n.get("conteudo_completo") or n.get("resumo") or "")
         novo.append({
             "titulo": n.get("titulo", ""),
+            "secao": n.get("secao", ""),
             "link": link,
             "score_relevancia": n.get("score_relevancia", 0),
             "conteudo_completo": conteudo[:MAX_CHARS_RESUMO * 2],
@@ -827,6 +1015,16 @@ def selecionar_com_resgate(noticias, pool=None, min_noticias=MIN_NOTICIAS_EPISOD
     # poço — exatamente o que o veto existe para impedir.
     noticias = [n for n in noticias if n.get("score_relevancia", 0) > SCORE_VETO / 2]
 
+    # Vagas reservadas: as melhores da seção de Crédito vão para a frente da
+    # fila e são as primeiras a entrar no orçamento de tempo e quota.
+    noticias = priorizar_secao(noticias)
+    reservadas = [n for n in noticias[:VAGAS_CREDITO]
+                  if n.get("secao") == SECAO_CREDITO]
+    if reservadas:
+        print(f"\n  ⭐ {len(reservadas)} vaga(s) reservada(s) para a seção de Crédito:")
+        for n in reservadas:
+            print(f"       • [{n.get('score_relevancia',0):>3}pts] {n.get('titulo','')[:58]}")
+
     selecionadas = selecionar_por_tempo(noticias, min_noticias=0, **kwargs)
     escolhidos   = {n.get("link") for n in selecionadas}
 
@@ -837,9 +1035,16 @@ def selecionar_com_resgate(noticias, pool=None, min_noticias=MIN_NOTICIAS_EPISOD
         # `ja_usados` vem do histórico de narradas: o pool só é limpo quando o
         # upload de estado dá certo, então conferir aqui evita re-narrar uma
         # notícia caso aquele upload tenha falhado num dia anterior.
-        bloqueados = set(escolhidos) | set(ja_usados or ())
+        historico = (ja_usados if isinstance(ja_usados, HistoricoUso)
+                     else HistoricoUso(ja_usados or ()))
+        sigs_hoje = [assinatura_titulo(n.get("titulo", "")) for n in selecionadas]
         reserva = sorted((n for n in pool
-                          if n.get("link") not in bloqueados
+                          if n.get("link") not in escolhidos
+                          and not historico.ja_narrada(n)
+                          # nem a mesma notícia que já entrou hoje por outra URL
+                          and not any(titulos_semelhantes(
+                                  assinatura_titulo(n.get("titulo", "")), s)
+                                  for s in sigs_hoje)
                           and n.get("score_relevancia", 0) > SCORE_VETO / 2),
                          key=lambda x: x.get("score_relevancia", 0), reverse=True)
         for n in reserva:
