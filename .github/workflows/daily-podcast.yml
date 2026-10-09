@@ -89,6 +89,12 @@ jobs:
       # 6. Executar o pipeline completo
       - name: 🚀 Executar pipeline
         env:
+          # Provedor de voz. Com AZURE_SPEECH_KEY definida, usa Azure;
+          # sem ela, cai na ElevenLabs. TTS_PROVEDOR força um dos dois.
+          TTS_PROVEDOR:            ${{ secrets.TTS_PROVEDOR }}
+          AZURE_SPEECH_KEY:        ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION:     ${{ secrets.AZURE_SPEECH_REGION }}
+          AZURE_VOICE:             ${{ secrets.AZURE_VOICE }}
           ELEVENLABS_API_KEY:      ${{ secrets.ELEVENLABS_API_KEY }}
           # Classificação por IA — opcional. Configure UMA destas; sem
           # nenhuma, a etapa é pulada e o episódio sai igual.

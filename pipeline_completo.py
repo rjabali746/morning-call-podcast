@@ -332,31 +332,75 @@ def etapa_scraping() -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ETAPA 2 — TTS (ElevenLabs)
+# ETAPA 2 — TTS (ElevenLabs ou Azure, trocável)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def etapa_tts(txt_path: str, config: dict) -> str:
-    """Converte roteiro em MP3 via ElevenLabs. Retorna caminho do .mp3."""
+def escolher_provedor_tts(config: dict):
+    """
+    Decide qual serviço de voz usar e devolve tudo o que a etapa 2 precisa.
+
+    A escolha é por variável de ambiente, para trocar de provedor sem tocar no
+    código: TTS_PROVEDOR=azure|elevenlabs. Sem ela, usa Azure se houver
+    AZURE_SPEECH_KEY, senão ElevenLabs. Assim dá para voltar atrás apagando
+    um secret, se a voz não agradar.
+    """
+    forcado = (os.environ.get("TTS_PROVEDOR") or "").strip().lower()
+    tem_azure = bool(os.environ.get("AZURE_SPEECH_KEY", "").strip())
+
+    usar_azure = (forcado == "azure") or (not forcado and tem_azure)
+    if usar_azure and not tem_azure:
+        log.warning("  ⚠️  TTS_PROVEDOR=azure mas AZURE_SPEECH_KEY não existe — "
+                    "voltando para a ElevenLabs.")
+        usar_azure = False
+
+    if usar_azure:
+        import azure_tts as prov
+        chave  = os.environ["AZURE_SPEECH_KEY"].strip()
+        regiao = os.environ.get("AZURE_SPEECH_REGION") or prov.REGIAO_PADRAO
+        log.info(f"  🔊 Provedor de voz: Azure AI Speech ({regiao})")
+        prov.verificar_conta(chave, regiao)
+        voz = prov.descobrir_voz(chave, regiao, os.environ.get("AZURE_VOICE"))
+        return {
+            "nome": "azure", "modulo": prov, "api_key": chave,
+            "voz": voz, "model": None, "lang": None, "restante": None,
+            "limite": prov.limite_chars(),
+            "bytes_por_char": prov.bytes_por_char_esperado(),
+        }
+
     from elevenlabs_tts import (
-        limpar_texto_para_audio,
-        dividir_em_chunks,
-        gerar_chunk_audio,
-        verificar_conta,
-        verificar_ou_descobrir_voice_id,
+        verificar_conta, verificar_ou_descobrir_voice_id, limite_do_modelo,
     )
+    import elevenlabs_tts as prov
+    el = config["elevenlabs"]
+    log.info(f"  🔊 Provedor de voz: ElevenLabs ({el['model']})")
+    restante = verificar_conta(el["api_key"])
+    voz = verificar_ou_descobrir_voice_id(el["api_key"], el["voice_id"])
+    return {
+        "nome": "elevenlabs", "modulo": prov, "api_key": el["api_key"],
+        "voz": voz, "model": el["model"],
+        "lang": el.get("language_code", "pt"), "restante": restante,
+        "limite": int(limite_do_modelo(el["model"]) * 0.95),
+        # mp3_44100_128 rende ~1.185 bytes por caractere de texto em pt-BR
+        "bytes_por_char": 1185.0,
+    }
 
-    el        = config["elevenlabs"]
-    api_key   = el["api_key"]
-    model     = el["model"]
-    lang_code = el.get("language_code", "pt")
 
-    restante = verificar_conta(api_key)
+def etapa_tts(txt_path: str, config: dict) -> str:
+    """Converte roteiro em MP3. Retorna caminho do .mp3."""
+    from elevenlabs_tts import limpar_texto_para_audio, dividir_em_chunks
 
-    # Valida voice_id configurado — auto-descobre se for inválido (404)
-    voice_id = verificar_ou_descobrir_voice_id(api_key, el["voice_id"])
+    p         = escolher_provedor_tts(config)
+    prov      = p["modulo"]
+    api_key   = p["api_key"]
+    voice_id  = p["voz"]
+    model     = p["model"]
+    lang_code = p["lang"]
+    restante  = p["restante"]
 
     with open(txt_path, encoding="utf-8") as f:
         texto_bruto = f.read()
+    # A normalização de números é a MESMA nos dois provedores — é ela que
+    # garante que nenhum dígito chegue ao TTS, independente de quem sintetiza.
     texto   = limpar_texto_para_audio(texto_bruto)
     n_chars = len(texto)
     log.info(f"  📝 {n_chars:,} chars | ~{n_chars / 810:.1f} min de áudio estimado")
@@ -366,9 +410,10 @@ def etapa_tts(txt_path: str, config: dict) -> str:
             f"Saldo insuficiente: {n_chars} chars necessários, {restante} disponíveis"
         )
 
-    # O limite por requisição vem do modelo: no Flash v2.5 são 40.000 chars,
-    # então o episódio inteiro sai em UMA chamada — sem emenda para dar errado.
-    chunks    = dividir_em_chunks(texto, model=model)
+    # O teto por requisição vem do provedor: 40.000 chars no Flash da
+    # ElevenLabs (episódio inteiro numa chamada) e ~7.000 na Azure, que limita
+    # por 10 minutos de áudio e portanto fatia o episódio em dois.
+    chunks    = dividir_em_chunks(texto, tamanho=p["limite"])
     audio_dir = BASE / "audio"
     audio_dir.mkdir(exist_ok=True)
     ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -386,15 +431,15 @@ def etapa_tts(txt_path: str, config: dict) -> str:
         anterior = chunks[i - 1] if i > 0 else None
         seguinte = chunks[i + 1] if i + 1 < len(chunks) else None
         log.info(f"  [{i+1}/{len(chunks)}] {len(chunk):,} chars...")
-        parte = gerar_chunk_audio(
+        parte = prov.gerar_chunk_audio(
             api_key, voice_id, model, chunk, lang_code,
             previous_text=anterior, next_text=seguinte,
         )
-        # Sanidade por chunk. Em mp3_44100_128 a fala em pt-BR rende cerca de
-        # 1.000 bytes por caractere de texto; exigimos 40% disso para tolerar
-        # variação de ritmo sem deixar passar narração truncada — foi esse tipo
-        # de retorno curto que publicou o episódio quebrado.
-        minimo_esperado = max(8000, int(len(chunk) * 400))
+        # Sanidade por chunk: retorno curto demais = narração truncada, que foi
+        # o que publicou o episódio quebrado. O limiar vem do bitrate do
+        # provedor (a Azure usa 96 kbps, a ElevenLabs 128), e exigimos 40% do
+        # esperado para tolerar variação de ritmo sem deixar passar defeito.
+        minimo_esperado = max(6000, int(len(chunk) * p["bytes_por_char"] * 0.4))
         if len(parte) < minimo_esperado:
             raise RuntimeError(
                 f"Chunk {i+1}/{len(chunks)} retornou áudio suspeito: "
@@ -408,7 +453,7 @@ def etapa_tts(txt_path: str, config: dict) -> str:
 
     tamanho_mb = mp3_path.stat().st_size / (1024 * 1024)
     dur_est    = len(texto) / 810   # taxa medida em episódio real pt-BR
-    log.info(f"  ✅ {mp3_path.name} ({tamanho_mb:.1f} MB, ~{dur_est:.1f} min)")
+    log.info(f"  ✅ {mp3_path.name} ({tamanho_mb:.1f} MB, ~{dur_est:.1f} min, via {p['nome']})")
     return str(mp3_path)
 
 
