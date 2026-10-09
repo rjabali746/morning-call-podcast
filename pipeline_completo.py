@@ -58,11 +58,16 @@ def load_config() -> dict:
     Carrega configuração.
     Prioridade: variáveis de ambiente (GitHub Actions) → config.json (local)
     """
-    if os.environ.get("ELEVENLABS_API_KEY"):
+    # O modo nuvem era detectado pela existência da chave da ElevenLabs. Com a
+    # Azure como voz principal, apagar aquele secret faria o pipeline procurar
+    # um config.json que não existe na nuvem e abortar o episódio inteiro.
+    em_nuvem = any(os.environ.get(v, "").strip() for v in
+                   ("GITHUB_ACTIONS", "ELEVENLABS_API_KEY", "AZURE_SPEECH_KEY"))
+    if em_nuvem:
         log.info("📋 Modo: GitHub Actions (variáveis de ambiente)")
         return {
             "elevenlabs": {
-                "api_key":  os.environ["ELEVENLABS_API_KEY"],
+                "api_key":  os.environ.get("ELEVENLABS_API_KEY", "").strip(),
                 # 'or default' — se o secret não existir, o Actions injeta string
                 # vazia; o 'or' garante o fallback em vez de mandar valor vazio.
                 "voice_id": os.environ.get("ELEVENLABS_VOICE_ID") or "onwK4e9ZLuTAKqWW03F9",
@@ -348,7 +353,7 @@ def etapa_scraping() -> str:
 # ETAPA 2 — TTS (ElevenLabs ou Azure, trocável)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def escolher_provedor_tts(config: dict):
+def escolher_provedor_tts(config: dict, forcar: str = None):
     """
     Decide qual serviço de voz usar e devolve tudo o que a etapa 2 precisa.
 
@@ -357,7 +362,7 @@ def escolher_provedor_tts(config: dict):
     AZURE_SPEECH_KEY, senão ElevenLabs. Assim dá para voltar atrás apagando
     um secret, se a voz não agradar.
     """
-    forcado = (os.environ.get("TTS_PROVEDOR") or "").strip().lower()
+    forcado = (forcar or os.environ.get("TTS_PROVEDOR") or "").strip().lower()
     tem_azure = bool(os.environ.get("AZURE_SPEECH_KEY", "").strip())
 
     usar_azure = (forcado == "azure") or (not forcado and tem_azure)
@@ -399,24 +404,47 @@ def escolher_provedor_tts(config: dict):
 
 
 def etapa_tts(txt_path: str, config: dict) -> str:
-    """Converte roteiro em MP3. Retorna caminho do .mp3."""
-    from elevenlabs_tts import limpar_texto_para_audio, dividir_em_chunks
+    """
+    Converte roteiro em MP3. Retorna caminho do .mp3.
 
-    p         = escolher_provedor_tts(config)
-    prov      = p["modulo"]
-    api_key   = p["api_key"]
-    voice_id  = p["voz"]
-    model     = p["model"]
-    lang_code = p["lang"]
-    restante  = p["restante"]
+    Voz principal: Azure. Se ela falhar — cota do tier gratuito esgotada,
+    assinatura suspensa, instabilidade — o episódio é gerado pela ElevenLabs,
+    desde que a chave dela exista. Com o plano gratuito da ElevenLabs isso dá
+    cerca de dois episódios de emergência por mês, a custo zero.
+    """
+    from elevenlabs_tts import limpar_texto_para_audio
 
     with open(txt_path, encoding="utf-8") as f:
         texto_bruto = f.read()
     # A normalização de números é a MESMA nos dois provedores — é ela que
     # garante que nenhum dígito chegue ao TTS, independente de quem sintetiza.
     texto   = limpar_texto_para_audio(texto_bruto)
-    n_chars = len(texto)
-    log.info(f"  📝 {n_chars:,} chars | ~{n_chars / 810:.1f} min de áudio estimado")
+    log.info(f"  📝 {len(texto):,} chars | ~{len(texto) / 810:.1f} min de áudio estimado")
+
+    p = escolher_provedor_tts(config)
+    try:
+        return _sintetizar_episodio(p, texto)
+    except Exception as e:
+        tem_backup = bool(config.get("elevenlabs", {}).get("api_key"))
+        if p["nome"] != "azure" or not tem_backup:
+            raise
+        log.warning(f"  ⚠️  Azure falhou ({e}).")
+        log.warning("  🛟 Acionando backup: ElevenLabs")
+        reserva = escolher_provedor_tts(config, forcar="elevenlabs")
+        return _sintetizar_episodio(reserva, texto)
+
+
+def _sintetizar_episodio(p: dict, texto: str) -> str:
+    """Gera o MP3 do episódio com o provedor `p`. Retorna o caminho."""
+    from elevenlabs_tts import dividir_em_chunks
+
+    prov      = p["modulo"]
+    api_key   = p["api_key"]
+    voice_id  = p["voz"]
+    model     = p["model"]
+    lang_code = p["lang"]
+    restante  = p["restante"]
+    n_chars   = len(texto)
 
     if restante is not None and n_chars > restante:
         raise RuntimeError(
