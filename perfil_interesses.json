@@ -1,8 +1,8 @@
 {
   "_meta": {
     "versao": 2,
-    "ultima_atualizacao": "2026-10-05",
-    "total_exemplos_analisados": 20,
+    "ultima_atualizacao": "2026-10-12",
+    "total_exemplos_analisados": 23,
     "contexto_profissional": "Empresa com forte atuação em crédito pessoa física e adquirência",
     "descricao": "Perfil de interesses do Roberto Jabali. Temas de peso 7 = core do negócio (crédito PF, adquirência, PME). Peso 5 = alto interesse pessoal/estratégico. Peso 4 = relevante mas secundário. Pesos menores = contexto de mercado.",
     "escala_de_pesos": {
@@ -627,7 +627,10 @@
     "Investigação interna do Master apontou produção industrial de documentos usados em carteiras de crédito",
     "https://valor.globo.com/politica/eleicoes-2026/noticia/2026/10/02/aps-falar-sobre-possvel-proibio-lula-diz-que-o-cidado-tem-direito-de-ter-quantos-cartes-quiser.ghtml",
     "https://valor.globo.com/politica/eleicoes-2026/noticia/2026/10/01/lula-diz-discutir-com-bc-proibir-bancos-de-dar-mais-de-um-cartao-de-credito-por-pessoa.ghtml",
-    "https://valor.globo.com/empresas/marketing/noticia/2026/09/29/mercado-pago-substitui-itau-como-instituicao-financeira-do-the-town.ghtml"
+    "https://valor.globo.com/empresas/marketing/noticia/2026/09/29/mercado-pago-substitui-itau-como-instituicao-financeira-do-the-town.ghtml",
+    "https://valor.globo.com/politica/eleicoes-2026/noticia/2026/10/09/o-que-e-split-payment-e-por-que-flavio-bolsonaro-quer-acabar-com-ele.ghtml",
+    "https://valor.globo.com/politica/eleicoes-2026/noticia/2026/10/07/durigan-rebate-campanha-de-flavio-acabar-com-split-payment-e-favorecer-quem-frauda.ghtml",
+    "https://valor.globo.com/financas/noticia/2026/09/30/mais-de-90percent-do-credito-consignado-do-master-foi-efetivado-antes-da-assinatura-dos-beneficiarios-diz-cgu.ghtml"
   ],
   "vetos": [],
   "_candidatos_pendentes": {
