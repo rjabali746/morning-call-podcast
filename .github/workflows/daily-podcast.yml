@@ -16,6 +16,7 @@ on:
 # ─── Permissões ───────────────────────────────────────────────────────────────
 permissions:
   contents: write   # necessário para fazer commit do MP3 e feed.xml
+  issues: write     # abre um alerta quando a voz principal falha
 
 # ─── Job principal ────────────────────────────────────────────────────────────
 # O gatilho é externo (cron-job.org), que REENVIA em timeout ou resposta

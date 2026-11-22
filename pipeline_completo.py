@@ -423,15 +423,128 @@ def etapa_tts(txt_path: str, config: dict) -> str:
 
     p = escolher_provedor_tts(config)
     try:
-        return _sintetizar_episodio(p, texto)
+        mp3 = _sintetizar_episodio(p, texto)
+        if p["nome"] == "azure":
+            resolver_alerta_tts(config)          # Azure ok: fecha alerta aberto
+        return mp3
     except Exception as e:
         tem_backup = bool(config.get("elevenlabs", {}).get("api_key"))
         if p["nome"] != "azure" or not tem_backup:
+            abrir_alerta_tts(config, f"A voz ({p['nome']}) falhou e não há "
+                             f"backup configurado.", str(e), episodio_saiu=False)
             raise
         log.warning(f"  ⚠️  Azure falhou ({e}).")
         log.warning("  🛟 Acionando backup: ElevenLabs")
         reserva = escolher_provedor_tts(config, forcar="elevenlabs")
-        return _sintetizar_episodio(reserva, texto)
+        try:
+            mp3 = _sintetizar_episodio(reserva, texto)
+        except Exception as e2:
+            abrir_alerta_tts(config, "Azure e ElevenLabs falharam — o episódio "
+                             "de hoje NÃO foi publicado.",
+                             f"Azure: {e}\nElevenLabs: {e2}", episodio_saiu=False)
+            raise
+        abrir_alerta_tts(config, "A Azure falhou e o episódio saiu pela "
+                         "ElevenLabs (backup). O saldo do backup é pequeno: "
+                         "resolva a Azure antes que ele acabe.",
+                         str(e), episodio_saiu=True)
+        return mp3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ALERTAS — issue no GitHub quando a voz principal falha
+# ─────────────────────────────────────────────────────────────────────────────
+# Em novembro a assinatura da Azure foi desativada e o backup segurou o podcast
+# em silêncio por dias, até o saldo dele acabar. O email de falha do GitHub só
+# veio no fim, e sem dizer a causa. Agora o PRIMEIRO dia de problema abre uma
+# issue com o motivo — e issue nova gera email. Quando a Azure volta, a issue é
+# fechada sozinha.
+
+TITULO_ALERTA = "⚠️ Morning Call: voz principal (Azure) com problema"
+_alerta_enviado_nesta_execucao = False   # as retentativas não repetem o alerta
+
+
+def _api_github(config):
+    gh = config.get("github", {})
+    token = os.environ.get("GH_TOKEN") or gh.get("token", "")
+    if not token:
+        return None
+    base = f"https://api.github.com/repos/{gh.get('usuario')}/{gh.get('repo')}"
+    headers = {"Authorization": f"token {token}",
+               "Accept": "application/vnd.github+json"}
+    return base, headers, gh.get("usuario", "")
+
+
+def _alerta_aberto(base, headers):
+    import requests as req
+    r = req.get(f"{base}/issues", headers=headers, timeout=15,
+                params={"state": "open", "per_page": 50})
+    if r.status_code != 200:
+        return None
+    for issue in r.json():
+        if issue.get("title") == TITULO_ALERTA and "pull_request" not in issue:
+            return issue
+    return None
+
+
+def abrir_alerta_tts(config, resumo, detalhe, episodio_saiu):
+    """Abre (ou comenta na já aberta) a issue de alerta. Nunca levanta exceção."""
+    global _alerta_enviado_nesta_execucao
+    if _alerta_enviado_nesta_execucao:
+        return
+    try:
+        import requests as req
+        api = _api_github(config)
+        if not api:
+            return
+        base, headers, dono = api
+        hoje = datetime.now().strftime("%d/%m/%Y %H:%M")
+        status = "✅ episódio publicado pelo backup" if episodio_saiu \
+                 else "❌ episódio NÃO publicado"
+        corpo = (f"**{hoje} — {status}**\n\n{resumo}\n\n"
+                 f"```\n{detalhe[:1500]}\n```\n\n"
+                 f"Causa mais comum: assinatura da Azure desativada (fim do "
+                 f"trial) ou cota do tier F0 esgotada. Confira em "
+                 f"https://portal.azure.com.\n\n"
+                 f"Esta issue fecha sozinha quando a Azure voltar a funcionar.")
+        existente = _alerta_aberto(base, headers)
+        if existente:
+            req.post(f"{existente['url']}/comments", headers=headers,
+                     timeout=15, json={"body": corpo})
+            log.warning(f"  📣 Alerta atualizado: {existente['html_url']}")
+        else:
+            # A menção ao dono garante a notificação por email
+            r = req.post(f"{base}/issues", headers=headers, timeout=15,
+                         json={"title": TITULO_ALERTA,
+                               "body": f"@{dono}\n\n{corpo}"})
+            if r.status_code == 201:
+                log.warning(f"  📣 Alerta aberto: {r.json().get('html_url')}")
+            else:
+                log.warning(f"  ⚠️  Não consegui abrir o alerta (HTTP {r.status_code})")
+        _alerta_enviado_nesta_execucao = True
+    except Exception as e:
+        log.warning(f"  ⚠️  Não consegui abrir o alerta: {e}")
+
+
+def resolver_alerta_tts(config):
+    """Fecha a issue de alerta, se houver, quando a Azure volta. Nunca levanta."""
+    try:
+        import requests as req
+        api = _api_github(config)
+        if not api:
+            return
+        base, headers, _ = api
+        existente = _alerta_aberto(base, headers)
+        if not existente:
+            return
+        hoje = datetime.now().strftime("%d/%m/%Y %H:%M")
+        req.post(f"{existente['url']}/comments", headers=headers, timeout=15,
+                 json={"body": f"✅ {hoje} — a Azure voltou a gerar o episódio. "
+                               f"Fechando o alerta."})
+        req.patch(existente["url"], headers=headers, timeout=15,
+                  json={"state": "closed"})
+        log.info(f"  ✅ Alerta resolvido e fechado: {existente['html_url']}")
+    except Exception as e:
+        log.warning(f"  ⚠️  Não consegui fechar o alerta: {e}")
 
 
 def _sintetizar_episodio(p: dict, texto: str) -> str:
