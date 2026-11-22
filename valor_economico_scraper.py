@@ -1461,6 +1461,35 @@ def resumir_noticia(conteudo, max_chars=500, max_chars_tts=None):
     return resumo.strip()
 
 
+_DIAS_SEMANA = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+                "sexta-feira", "sábado", "domingo"]
+_MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
+          "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+
+def data_de_hoje_brasil():
+    """
+    Data de hoje no fuso de São Paulo. O runner do GitHub roda em UTC; num
+    disparo de madrugada ou num teste manual à noite, a data UTC já seria a do
+    dia seguinte e o episódio anunciaria a data errada.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Sao_Paulo"))
+    except Exception:
+        return datetime.utcnow() - timedelta(hours=3)
+
+
+def data_falada(quando=None):
+    """'segunda-feira, 23 de novembro' — o número vira extenso no TTS."""
+    d = quando or data_de_hoje_brasil()
+    if d.day == 1:
+        dia = "primeiro"                     # "primeiro de dezembro", não "um"
+    else:
+        dia = str(d.day)
+    return f"{_DIAS_SEMANA[d.weekday()]}, {dia} de {_MESES[d.month - 1]}"
+
+
 def formatar_para_podcast(noticias):
     """
     Gera o roteiro narrado do episódio.
@@ -1472,18 +1501,21 @@ def formatar_para_podcast(noticias):
     Abertura enxuta, sem cabeçalho de data. Nenhum dígito no roteiro:
     numerais vão por extenso para não travar a narração.
     """
-    # Abertura enxuta — sem cabeçalho de data nem apresentação longa.
+    # Abertura enxuta, com a data falada logo no início: sem ela, ouvindo
+    # episódios fora de ordem, o Roberto se perdia na cronologia.
     # "Jábali" acentuado ajuda o TTS a acertar a tônica na primeira sílaba.
     # O numeral vai por extenso porque dígitos soltos travam a narração.
     q = len(noticias)
     plural = "notícia" if q == 1 else "notícias"
-    if q in _CARDINAIS_F:
+    if q == 1:
+        abertura = "Vamos direto à principal notícia"
+    elif q in _CARDINAIS_F:
         abertura = f"Vamos direto às {_CARDINAIS_F[q]} principais {plural}"
     else:
         abertura = "Vamos direto às principais notícias"
 
     linhas = [
-        f"Morning Call Jábali. {abertura}.",
+        f"Morning Call Jábali de {data_falada()}. {abertura}.",
         "",
     ]
 

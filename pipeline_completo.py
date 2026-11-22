@@ -107,6 +107,13 @@ def load_config() -> dict:
 # começa limpo a cada corrida, então buscamos do repositório na API.
 ARQUIVOS_DE_ESTADO = ["used_articles.json", "pool_reserva.json"]
 
+# Episódios mais antigos que isso saem do feed (e, portanto, do Spotify) e são
+# apagados do repositório. Sobrescrevível pelo secret RETENCAO_DIAS.
+RETENCAO_DIAS = int(os.environ.get("RETENCAO_DIAS") or 14)
+# Na primeira execução há dezenas de antigos; o teto evita uma rajada de
+# commits que esbarre no limite da API. O resto sai nas execuções seguintes.
+MAX_REMOCOES_POR_EXECUCAO = 60
+
 
 def baixar_historico_do_github(config: dict):
     """
@@ -618,7 +625,7 @@ def _sintetizar_episodio(p: dict, texto: str) -> str:
 def etapa_publicacao(mp3_path: str, config: dict):
     """Upload do MP3 e atualização do feed.xml no GitHub Pages."""
     import re
-    from datetime import timezone, datetime as dt
+    from datetime import timezone, timedelta, datetime as dt
     from publicar_podcast import (
         GitHubPublisher,
         gerar_feed_xml,
@@ -672,11 +679,30 @@ def etapa_publicacao(mp3_path: str, config: dict):
     if not ok_mp3:
         raise RuntimeError("Falha ao enviar o MP3 para o GitHub")
 
-    # Feed RSS
-    audios = gh.listar_audios_no_repo()
-    if nome_mp3 not in audios:
-        audios.append(nome_mp3)
-    audios.sort(reverse=True)
+    # ── Feed RSS: só os episódios dentro da janela de retenção ───────────────
+    # O Spotify (e os outros apps) espelham o feed: episódio que sai do feed
+    # some do app em cerca de uma hora. Manter só os últimos RETENCAO_DIAS
+    # limpa a conta automaticamente — e o repositório para de crescer.
+    detalhados = gh.listar_audios_detalhado()
+    listagem_ok = detalhados is not None
+    detalhados = detalhados or []
+    tamanhos = {a["name"]: a["size"] for a in detalhados}
+    if nome_mp3 not in tamanhos:
+        detalhados.append({"name": nome_mp3, "sha": None, "size": tamanho})
+
+    limite = dt.now(timezone.utc) - timedelta(days=RETENCAO_DIAS)
+    recentes, antigos = [], []
+    for a in detalhados:
+        mm = re.search(r"(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})", a["name"])
+        quando = (dt(*map(int, mm.groups()), tzinfo=timezone.utc) if mm else None)
+        # O episódio de hoje e qualquer arquivo sem data reconhecível ficam
+        if a["name"] == nome_mp3 or quando is None or quando >= limite:
+            recentes.append(a)
+        else:
+            antigos.append(a)
+    audios = sorted((a["name"] for a in recentes), reverse=True)
+    log.info(f"  🗂️  Feed com {len(audios)} episódio(s) dos últimos "
+             f"{RETENCAO_DIAS} dias; {len(antigos)} antigo(s) a remover")
 
     episodios = []
     for nome in audios:
@@ -696,7 +722,7 @@ def etapa_publicacao(mp3_path: str, config: dict):
             "descricao":    f"Principais notícias de crédito e finanças - {titulo2}",
             "data":         data_rfc822(dt2),
             "duracao":      duracao_str if nome == nome_mp3 else "10:00",
-            "tamanho":      tamanho     if nome == nome_mp3 else 0,
+            "tamanho":      tamanho     if nome == nome_mp3 else tamanhos.get(nome, 0),
         })
 
     feed_xml = gerar_feed_xml(episodios, pages_url, podcast_config)
@@ -707,6 +733,22 @@ def etapa_publicacao(mp3_path: str, config: dict):
     )
     if not ok_feed:
         raise RuntimeError("Falha ao atualizar o feed.xml")
+
+    # ── Remover os MP3s fora da janela ───────────────────────────────────────
+    # Só depois do feed novo estar publicado, e só se a listagem do repositório
+    # funcionou: com a listagem falha, "nenhum arquivo" poderia ser erro.
+    # Falha aqui não derruba a publicação — o episódio de hoje já está no ar.
+    if listagem_ok and antigos:
+        removidos = 0
+        for a in antigos[:MAX_REMOCOES_POR_EXECUCAO]:
+            try:
+                if gh.apagar_arquivo(f"audio/{a['name']}", a["sha"],
+                                     f"🧹 Remove episódio antigo: {a['name']}"):
+                    removidos += 1
+            except Exception as e:
+                log.warning(f"  ⚠️  Não removi {a['name']}: {e}")
+        log.info(f"  🧹 {removidos} episódio(s) com mais de {RETENCAO_DIAS} "
+                 f"dias removido(s) do feed e do repositório")
 
     with open(BASE / "feed.xml", "w", encoding="utf-8") as f:
         f.write(feed_xml)

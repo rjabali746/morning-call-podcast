@@ -157,10 +157,27 @@ class GitHubPublisher:
 
     def listar_audios_no_repo(self):
         """Lista os arquivos MP3 já no repositório."""
+        return [a["name"] for a in (self.listar_audios_detalhado() or [])]
+
+    def listar_audios_detalhado(self):
+        """
+        MP3s do repositório com sha e tamanho. Devolve None se a listagem
+        FALHAR — diferente de lista vazia, para que ninguém apague arquivos
+        com base numa resposta de erro.
+        """
         r = self._get(f"/contents/audio?ref={self.branch}")
-        if r.status_code == 200:
-            return [f["name"] for f in r.json() if f["name"].endswith(".mp3")]
-        return []
+        if r.status_code != 200:
+            return None
+        return [{"name": f["name"], "sha": f["sha"], "size": f.get("size", 0)}
+                for f in r.json() if f["name"].endswith(".mp3")]
+
+    def apagar_arquivo(self, caminho_repo, sha, mensagem_commit):
+        """Remove um arquivo do repositório. Devolve True se removeu."""
+        r = requests.delete(f"{self.base}/contents/{caminho_repo}",
+                            headers=self.headers, timeout=60,
+                            json={"message": mensagem_commit, "sha": sha,
+                                  "branch": self.branch})
+        return r.status_code == 200
 
 
 # ============================================================================
